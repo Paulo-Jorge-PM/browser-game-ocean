@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+:root {
+  --ocean-dark: #0a1628;
+  --ocean-mid: #0f2847;
+  --ocean-light: #1a4a7a;
+  --accent-cyan: #00d4ff;
+  --accent-green: #00ff88;
+  --accent-orange: #ff8800;
+  --accent-red: #ff4444;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--ocean-dark);
+  color: white;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}

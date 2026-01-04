@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="ship-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#667788"/>
+      <stop offset="100%" style="stop-color:#445566"/>
+    </linearGradient>
+  </defs>
+  <!-- Hull -->
+  <path d="M12 42 L20 18 L44 18 L52 42 Z" fill="url(#ship-grad)" stroke="#889999" stroke-width="2"/>
+  <!-- Bridge -->
+  <rect x="24" y="22" width="16" height="12" rx="2" fill="#334455" stroke="#556677"/>
+  <!-- Windows -->
+  <circle cx="28" cy="28" r="3" fill="#00ffff" opacity="0.9"/>
+  <circle cx="36" cy="28" r="3" fill="#00ffff" opacity="0.9"/>
+  <!-- Antenna -->
+  <line x1="32" y1="18" x2="32" y2="8" stroke="#aabbcc" stroke-width="2"/>
+  <circle cx="32" cy="6" r="3" fill="#ff3333"/>
+  <!-- Base platform -->
+  <rect x="8" y="42" width="48" height="6" rx="2" fill="#556677"/>
+</svg>

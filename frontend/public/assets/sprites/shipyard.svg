@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="yard-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#7799bb"/>
+      <stop offset="100%" style="stop-color:#556688"/>
+    </linearGradient>
+  </defs>
+  <!-- Main building -->
+  <rect x="8" y="30" width="48" height="26" rx="2" fill="url(#yard-grad)" stroke="#99bbdd" stroke-width="2"/>
+  <!-- Crane tower -->
+  <rect x="14" y="10" width="6" height="20" fill="#ffaa00"/>
+  <!-- Crane arm -->
+  <rect x="14" y="10" width="36" height="4" fill="#ffaa00"/>
+  <!-- Hook cable -->
+  <line x1="44" y1="14" x2="44" y2="28" stroke="#888888" stroke-width="2"/>
+  <!-- Hook -->
+  <path d="M42 28 Q44 32 46 28" fill="none" stroke="#666666" stroke-width="2"/>
+  <!-- Ship under construction -->
+  <ellipse cx="38" cy="44" rx="12" ry="6" fill="#666688" opacity="0.7"/>
+  <!-- Bay doors -->
+  <rect x="12" y="36" width="14" height="18" fill="#334455" stroke="#556677"/>
+  <line x1="19" y1="36" x2="19" y2="54" stroke="#556677" stroke-width="2"/>
+</svg>

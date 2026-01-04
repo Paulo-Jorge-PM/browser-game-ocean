@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="def-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6688aa"/>
+      <stop offset="100%" style="stop-color:#445566"/>
+    </linearGradient>
+  </defs>
+  <!-- Platform base -->
+  <rect x="8" y="40" width="48" height="16" rx="4" fill="#445566" stroke="#667788"/>
+  <!-- Shield generator dome -->
+  <ellipse cx="32" cy="36" rx="20" ry="12" fill="url(#def-grad)" stroke="#88aacc" stroke-width="2"/>
+  <!-- Shield effect -->
+  <ellipse cx="32" cy="32" rx="26" ry="16" fill="none" stroke="#00ffff" stroke-width="2" opacity="0.5" stroke-dasharray="4 2"/>
+  <!-- Turrets -->
+  <rect x="10" y="28" width="8" height="12" rx="2" fill="#556677"/>
+  <rect x="46" y="28" width="8" height="12" rx="2" fill="#556677"/>
+  <!-- Turret barrels -->
+  <rect x="12" y="24" width="4" height="6" fill="#444444"/>
+  <rect x="48" y="24" width="4" height="6" fill="#444444"/>
+</svg>

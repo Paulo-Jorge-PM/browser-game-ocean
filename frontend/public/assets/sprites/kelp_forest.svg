@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Kelp strands -->
+  <path d="M12 56 Q14 45 10 35 Q14 25 12 15 Q16 10 14 5" fill="none" stroke="#22aa44" stroke-width="4" stroke-linecap="round"/>
+  <path d="M24 56 Q22 48 26 40 Q22 30 26 20 Q22 12 24 6" fill="none" stroke="#33bb55" stroke-width="4" stroke-linecap="round"/>
+  <path d="M36 56 Q38 46 34 36 Q38 26 36 18 Q40 10 38 4" fill="none" stroke="#44cc66" stroke-width="4" stroke-linecap="round"/>
+  <path d="M48 56 Q46 50 50 42 Q46 32 50 24 Q46 16 48 10" fill="none" stroke="#55dd77" stroke-width="4" stroke-linecap="round"/>
+  <!-- Bubbles -->
+  <circle cx="18" cy="20" r="3" fill="#aaffff" opacity="0.6"/>
+  <circle cx="42" cy="15" r="2" fill="#aaffff" opacity="0.6"/>
+  <circle cx="30" cy="12" r="2.5" fill="#aaffff" opacity="0.6"/>
+  <!-- Base anchors -->
+  <ellipse cx="32" cy="58" rx="28" ry="4" fill="#336644" opacity="0.5"/>
+</svg>

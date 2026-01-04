@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: ocean-depths-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=ocean_depths
+    networks:
+      - ocean-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-depths-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - ocean-network
+
+  # Optional: MongoDB admin UI
+  mongo-express:
+    image: mongo-express
+    container_name: ocean-depths-mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_URL=mongodb://mongodb:27017
+      - ME_CONFIG_BASICAUTH=false
+    depends_on:
+      - mongodb
+    networks:
+      - ocean-network
+    profiles:
+      - admin
+
+  # Optional: Redis admin UI
+  redis-commander:
+    image: rediscommander/redis-commander
+    container_name: ocean-depths-redis-commander
+    ports:
+      - "8082:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - ocean-network
+    profiles:
+      - admin
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  ocean-network:
+    driver: bridge

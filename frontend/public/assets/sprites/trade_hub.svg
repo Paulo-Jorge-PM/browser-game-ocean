@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="trade-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#44aa88"/>
+      <stop offset="100%" style="stop-color:#338866"/>
+    </linearGradient>
+  </defs>
+  <!-- Main building -->
+  <rect x="8" y="26" width="48" height="28" rx="4" fill="url(#trade-grad)" stroke="#66ccaa" stroke-width="2"/>
+  <!-- Trade arrows (bidirectional) -->
+  <!-- Right arrow -->
+  <path d="M34 36 L46 36 L46 32 L54 40 L46 48 L46 44 L34 44 Z" fill="#00ff88"/>
+  <!-- Left arrow -->
+  <path d="M30 44 L18 44 L18 48 L10 40 L18 32 L18 36 L30 36 Z" fill="#00ff88"/>
+  <!-- Roof/awning -->
+  <path d="M6 26 L32 14 L58 26" fill="none" stroke="#55bb99" stroke-width="3"/>
+  <!-- Windows -->
+  <rect x="14" y="30" width="8" height="6" rx="1" fill="#ffffcc" opacity="0.6"/>
+  <rect x="42" y="30" width="8" height="6" rx="1" fill="#ffffcc" opacity="0.6"/>
+</svg>

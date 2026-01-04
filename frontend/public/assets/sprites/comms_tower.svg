@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="comms-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#44bb88"/>
+      <stop offset="100%" style="stop-color:#339966"/>
+    </linearGradient>
+  </defs>
+  <!-- Tower structure -->
+  <path d="M28 56 L24 24 L32 4 L40 24 L36 56" fill="url(#comms-grad)" stroke="#66ddaa" stroke-width="2"/>
+  <!-- Dish -->
+  <ellipse cx="32" cy="20" rx="14" ry="6" fill="#cccccc" stroke="#999999" stroke-width="1"/>
+  <!-- Signal waves -->
+  <path d="M48 16 Q54 20 48 24" fill="none" stroke="#00ffff" stroke-width="2" opacity="0.8"/>
+  <path d="M52 14 Q60 20 52 26" fill="none" stroke="#00ffff" stroke-width="2" opacity="0.6"/>
+  <path d="M56 12 Q66 20 56 28" fill="none" stroke="#00ffff" stroke-width="2" opacity="0.4"/>
+  <!-- Blinking light -->
+  <circle cx="32" cy="4" r="3" fill="#ff0000"/>
+  <!-- Base -->
+  <rect x="22" y="54" width="20" height="6" rx="2" fill="#445544"/>
+</svg>
