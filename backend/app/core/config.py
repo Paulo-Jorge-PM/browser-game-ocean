@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     # Game settings
     resource_tick_seconds: int = 60  # How often resources update
     grid_default_width: int = 10
-    grid_default_height: int = 15
+    grid_default_height: int = 17
+    grid_surface_row_index: int = 2
 
     # Event-driven sync settings
     resource_sync_interval_seconds: int = 30  # How often frontend syncs with backend

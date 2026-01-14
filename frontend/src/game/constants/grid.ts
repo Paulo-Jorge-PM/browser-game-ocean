@@ -1,0 +1,2 @@
+export const ABOVE_SURFACE_ROWS = 2;
+export const SURFACE_ROW_INDEX = ABOVE_SURFACE_ROWS;

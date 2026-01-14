@@ -50,7 +50,7 @@ export interface GridCell {
   position: GridPosition;
   base: Base | null;
   isUnlocked: boolean;
-  depth: number; // -1 = sky, 0 = surface, higher = deeper
+  depth: number; // 0 = surface, negative = above surface, positive = deeper
   zone: CellZone;
 }
 

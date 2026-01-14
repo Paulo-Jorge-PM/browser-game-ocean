@@ -236,6 +236,11 @@ async def start_build_action(request: V1BuildStartRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid position")
 
     cell = grid[y][x]
+    if cell.get("depth", 0) < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Above-surface construction locked",
+        )
     if not cell["is_unlocked"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cell is locked")
 

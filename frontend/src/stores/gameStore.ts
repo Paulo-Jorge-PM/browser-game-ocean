@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Resources, GridCell, GridPosition, Base, UIState, BaseType, CellZone } from '../types/game';
+import { SURFACE_ROW_INDEX } from '../game/constants/grid';
 import {
   startAction,
   completeAction,
@@ -14,8 +15,7 @@ import type { ConnectionSide } from '../game/constants/bases';
 
 // Helper to determine zone based on depth
 const getZoneForDepth = (depth: number): CellZone => {
-  if (depth < 0) return 'sky';
-  if (depth === 0) return 'surface';
+  if (depth <= 0) return 'surface';
   if (depth < 5) return 'shallow';
   return 'deep';
 };
@@ -157,12 +157,11 @@ const zeroResources = (): Resources => ({
 const createEmptyGrid = (width: number, height: number): GridCell[][] => {
   const grid: GridCell[][] = [];
 
-  // First row (index 0) is the sky/surface row where command ship goes
-  // We treat y=0 as the surface level
+  // Surface sits below a small buffer of above-water rows.
   for (let y = 0; y < height; y++) {
     const row: GridCell[] = [];
     for (let x = 0; x < width; x++) {
-      const depth = y; // y=0 is surface
+      const depth = y - SURFACE_ROW_INDEX;
       row.push({
         position: { x, y },
         base: null,
@@ -203,9 +202,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   resourceCapacity: initialCapacity,
   resourceProduction: zeroResources(),
   resourceConsumption: zeroResources(),
-  grid: createEmptyGrid(10, 15),
+  grid: createEmptyGrid(10, 15 + SURFACE_ROW_INDEX),
   gridWidth: 10,
-  gridHeight: 15,
+  gridHeight: 15 + SURFACE_ROW_INDEX,
   unlockedTechs: [],
   currentResearch: null,
   researchProgress: 0,
@@ -270,6 +269,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const cell = state.grid[position.y]?.[position.x];
 
     if (!cell) return { canBuild: false, reason: 'Invalid position' };
+    if (cell.depth < 0) return { canBuild: false, reason: 'Above-surface construction locked' };
     if (!cell.isUnlocked) return { canBuild: false, reason: 'Cell is locked' };
     if (cell.base) return { canBuild: false, reason: 'Cell already has a base' };
 
@@ -323,7 +323,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     for (let y = 0; y < state.gridHeight; y++) {
       for (let x = 0; x < state.gridWidth; x++) {
         const cell = state.grid[y][x];
-        if (cell.isUnlocked && !cell.base) {
+        if (cell.isUnlocked && !cell.base && cell.depth >= 0) {
           buildable.push({ x, y });
         }
       }
@@ -613,42 +613,52 @@ export const useGameStore = create<GameState>((set, get) => ({
     const now = Date.now();
     const newQueue = new Map(state.constructionQueue);
     const completions: { baseId: string; actionId?: string; position: GridPosition }[] = [];
+    let queueChanged = false;
+    let selectedBaseUpdate: Base | null = null;
 
-    // Update progress and identify completions without mutating operational state.
-    const newGrid = state.grid.map((row) =>
-      row.map((cell) => {
-        if (cell.base && !cell.base.isOperational) {
-          const construction = state.constructionQueue.get(cell.base.id);
-          if (construction) {
-            const elapsed = now - construction.startTime;
-            const total = construction.endTime - construction.startTime;
-            const progress = Math.min(100, (elapsed / total) * 100);
+    // Identify completions and update selected base progress without redrawing the grid every tick.
+    for (let y = 0; y < state.gridHeight; y++) {
+      for (let x = 0; x < state.gridWidth; x++) {
+        const cell = state.grid[y]?.[x];
+        if (!cell?.base || cell.base.isOperational) continue;
 
-            if (progress >= 100 && !construction.isCompleting) {
-              construction.isCompleting = true;
-              newQueue.set(cell.base.id, { ...construction });
-              completions.push({
-                baseId: cell.base.id,
-                actionId: cell.base.actionId ?? undefined,
-                position: cell.position,
-              });
-            }
+        const construction = state.constructionQueue.get(cell.base.id);
+        if (!construction) continue;
 
-            return {
-              ...cell,
-              base: {
-                ...cell.base,
-                constructionProgress: Math.min(100, progress),
-              },
-            };
-          }
+        const elapsed = now - construction.startTime;
+        const total = construction.endTime - construction.startTime;
+        const progress = Math.min(100, (elapsed / total) * 100);
+
+        if (progress >= 100 && !construction.isCompleting) {
+          newQueue.set(cell.base.id, { ...construction, isCompleting: true });
+          queueChanged = true;
+          completions.push({
+            baseId: cell.base.id,
+            actionId: cell.base.actionId ?? undefined,
+            position: cell.position,
+          });
         }
-        return cell;
-      })
-    );
 
-    // Single atomic state update
-    set({ grid: newGrid, constructionQueue: newQueue });
+        if (
+          state.ui.selectedCell?.x === x &&
+          state.ui.selectedCell?.y === y &&
+          state.ui.selectedBase &&
+          Math.floor(state.ui.selectedBase.constructionProgress) !== Math.floor(progress)
+        ) {
+          selectedBaseUpdate = {
+            ...state.ui.selectedBase,
+            constructionProgress: Math.min(100, progress),
+          };
+        }
+      }
+    }
+
+    if (queueChanged || selectedBaseUpdate) {
+      set({
+        constructionQueue: queueChanged ? newQueue : state.constructionQueue,
+        ui: selectedBaseUpdate ? { ...state.ui, selectedBase: selectedBaseUpdate } : state.ui,
+      });
+    }
 
     if (completions.length === 0) {
       return;
@@ -1079,6 +1089,20 @@ export const useGameStore = create<GameState>((set, get) => ({
       return;
     }
 
+    if (syncInFlight) {
+      console.debug('Resource sync skipped: previous sync still in flight');
+      return;
+    }
+
+    const requestId = createRequestId('resource-sync');
+    const controller = new AbortController();
+    const startedAt = performance.now();
+    syncInFlight = true;
+
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, RESOURCE_SYNC_TIMEOUT_MS);
+
     try {
       // Round to integers - backend expects int, but local tick produces floats
       const response = await syncResources(cityId, {
@@ -1089,7 +1113,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         energy: Math.round(state.resources.energy),
         minerals: Math.round(state.resources.minerals),
         tech_points: Math.round(state.resources.techPoints),
-      });
+      }, { signal: controller.signal, requestId });
 
       // Update resources from server (server is source of truth)
       const newResources: Resources = {
@@ -1121,11 +1145,21 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (response.drift_detected) {
         console.warn('Resource drift detected:', response.drift_details);
       } else {
-        console.log('Resources synced with server');
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        console.debug(`Resources synced in ${elapsedMs}ms`, { requestId });
       }
 
     } catch (error) {
-      console.error('Failed to sync resources:', error);
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      const err = error as Error & { status?: number; name?: string };
+      if (err.name === 'AbortError') {
+        console.warn(`Resource sync timed out after ${elapsedMs}ms`, { requestId });
+      } else {
+        console.error(`Failed to sync resources after ${elapsedMs}ms`, { requestId, status: err.status, error: err });
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      syncInFlight = false;
     }
   },
 
@@ -1210,6 +1244,13 @@ let tickInterval: number | null = null;
 
 // Resource sync interval (server sync)
 let syncInterval: number | null = null;
+let syncInFlight = false;
+const RESOURCE_SYNC_TIMEOUT_MS = 10000;
+
+const createRequestId = (prefix: string) => {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now()}-${random}`;
+};
 
 export const startResourceTick = () => {
   if (tickInterval) return;

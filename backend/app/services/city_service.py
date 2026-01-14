@@ -6,6 +6,7 @@ from ..core.config import settings
 
 def create_empty_grid(width: int, height: int) -> list[list[dict]]:
     grid = []
+    surface_row_index = settings.grid_surface_row_index
     for y in range(height):
         row = []
         for x in range(width):
@@ -13,8 +14,8 @@ def create_empty_grid(width: int, height: int) -> list[list[dict]]:
                 {
                     "position": {"x": x, "y": y},
                     "base": None,
-                    "is_unlocked": y == 0,
-                    "depth": y,
+                    "is_unlocked": y == surface_row_index,
+                    "depth": y - surface_row_index,
                 }
             )
         grid.append(row)
@@ -24,25 +25,26 @@ def create_empty_grid(width: int, height: int) -> list[list[dict]]:
 def build_new_city_document(name: str, player_id: str) -> dict:
     grid = create_empty_grid(settings.grid_default_width, settings.grid_default_height)
 
+    surface_row_index = settings.grid_surface_row_index
     center_x = settings.grid_default_width // 2
     command_ship = {
         "id": str(uuid.uuid4()),
         "type": "command_ship",
-        "position": {"x": center_x, "y": 0},
+        "position": {"x": center_x, "y": surface_row_index},
         "level": 1,
         "construction_progress": 100,
         "is_operational": True,
         "workers": 5,
     }
-    grid[0][center_x]["base"] = command_ship
-    grid[0][center_x]["is_unlocked"] = True
+    grid[surface_row_index][center_x]["base"] = command_ship
+    grid[surface_row_index][center_x]["is_unlocked"] = True
 
     for dx in [-1, 0, 1]:
         nx = center_x + dx
         if 0 <= nx < settings.grid_default_width:
-            grid[0][nx]["is_unlocked"] = True
-    if settings.grid_default_height > 1:
-        grid[1][center_x]["is_unlocked"] = True
+            grid[surface_row_index][nx]["is_unlocked"] = True
+    if settings.grid_default_height > surface_row_index + 1:
+        grid[surface_row_index + 1][center_x]["is_unlocked"] = True
 
     # Default unlocked techs - Tier 1 techs that have no prerequisites and cost 0
     default_unlocked_techs = [

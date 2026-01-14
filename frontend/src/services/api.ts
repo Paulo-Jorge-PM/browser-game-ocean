@@ -162,11 +162,17 @@ export async function cancelAction(actionId: string): Promise<{ status: string; 
 
 export async function syncResources(
   cityId: string,
-  clientResources: Record<string, number>
+  clientResources: Record<string, number>,
+  options?: { signal?: AbortSignal; requestId?: string }
 ): Promise<ResourceSyncResponse> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (options?.requestId) {
+    headers['X-Request-Id'] = options.requestId;
+  }
   return requestJson<ResourceSyncResponse>(`${API_URL}/api/v1/resources/sync`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
+    signal: options?.signal,
     body: JSON.stringify({ city_id: cityId, client_resources: clientResources }),
   });
 }

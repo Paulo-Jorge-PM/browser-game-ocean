@@ -90,6 +90,9 @@ async def build_base(sid, data):
             return
 
         cell = grid[y][x]
+        if cell.get("depth", 0) < 0:
+            await sio.emit("build_error", {"error": "Above-surface construction locked"}, to=sid)
+            return
         if not cell.get("is_unlocked"):
             await sio.emit("build_error", {"error": "Cell is locked"}, to=sid)
             return

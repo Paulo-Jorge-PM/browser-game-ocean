@@ -16,9 +16,10 @@ export class WaveSystem {
   private width: number;
   private surfaceY: number;
 
-  constructor(parent: Container, width: number, surfaceY: number) {
+  constructor(parent: Container, width: number, surfaceY: number, offsetX: number = 0) {
     this.container = new Container();
     this.container.eventMode = 'none'; // Don't block clicks
+    this.container.x = offsetX;
     this.width = width;
     this.surfaceY = surfaceY;
     parent.addChild(this.container);
@@ -106,9 +107,12 @@ export class WaveSystem {
     });
   }
 
-  public resize(width: number, surfaceY: number) {
+  public resize(width: number, surfaceY: number, offsetX?: number) {
     this.width = width;
     this.surfaceY = surfaceY;
+    if (offsetX !== undefined) {
+      this.container.x = offsetX;
+    }
   }
 
   public destroy() {

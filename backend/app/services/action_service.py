@@ -67,6 +67,8 @@ async def start_build_action(
         raise ValueError("Invalid position")
 
     cell = grid[y][x]
+    if cell.get("depth", 0) < 0:
+        raise ValueError("Above-surface construction locked")
     if not cell["is_unlocked"]:
         raise ValueError("Cell is locked")
 
