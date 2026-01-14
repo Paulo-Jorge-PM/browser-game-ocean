@@ -3,12 +3,12 @@ from bson import ObjectId
 
 from ...core.database import get_database
 from ...core.security import get_current_user
-from ...models.player import Player
+from .schemas import V1Player
 
 router = APIRouter()
 
 
-@router.get("/me", response_model=Player)
+@router.get("/me", response_model=V1Player)
 async def get_current_player(current_user: dict = Depends(get_current_user)):
     db = get_database()
     player_id = current_user["user_id"]
@@ -20,7 +20,7 @@ async def get_current_player(current_user: dict = Depends(get_current_user)):
             detail="Player not found",
         )
 
-    return Player(
+    return V1Player(
         id=str(player_doc["_id"]),
         username=player_doc["username"],
         email=player_doc["email"],
@@ -31,7 +31,7 @@ async def get_current_player(current_user: dict = Depends(get_current_user)):
     )
 
 
-@router.get("/{player_id}", response_model=Player)
+@router.get("/{player_id}", response_model=V1Player)
 async def get_player(player_id: str):
     db = get_database()
 
@@ -42,7 +42,7 @@ async def get_player(player_id: str):
             detail="Player not found",
         )
 
-    return Player(
+    return V1Player(
         id=str(player_doc["_id"]),
         username=player_doc["username"],
         email=player_doc["email"],

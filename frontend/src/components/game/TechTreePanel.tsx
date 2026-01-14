@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import {
   TECH_TREE,
@@ -11,16 +12,48 @@ interface TechTreePanelProps {
 }
 
 export function TechTreePanel({ onClose }: TechTreePanelProps) {
+  // Force re-render every 100ms while researching to update progress bar
+  const [, setTick] = useState(0);
   const {
     resources,
     unlockedTechs,
     currentResearch,
-    setResearch,
-    unlockTech,
-    setResources,
+    researchProgress,
+    serverPendingActions,
+    startResearchActionV2,
   } = useGameStore();
 
-  const handleStartResearch = (techId: string) => {
+  // Force re-render every 100ms while researching to update progress bar
+  useEffect(() => {
+    if (!currentResearch) return;
+
+    const interval = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [currentResearch]);
+
+  // Calculate research progress from pending action
+  const getResearchProgress = (): { progress: number; timeRemaining: number } => {
+    if (!currentResearch) return { progress: 0, timeRemaining: 0 };
+
+    // Find the research action in pending actions
+    for (const action of serverPendingActions.values()) {
+      if (action.actionType === 'research' && action.data.techId === currentResearch) {
+        const now = Date.now();
+        const elapsed = now - action.startedAt;
+        const total = action.endsAt - action.startedAt;
+        const progress = Math.min(100, (elapsed / total) * 100);
+        const timeRemaining = Math.max(0, Math.ceil((action.endsAt - now) / 1000));
+        return { progress, timeRemaining };
+      }
+    }
+
+    return { progress: researchProgress, timeRemaining: 0 };
+  };
+
+  const handleStartResearch = async (techId: string) => {
     const tech = TECH_TREE[techId];
     if (!tech) return;
 
@@ -34,16 +67,26 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
       return;
     }
 
-    // Deduct cost and start research
-    setResources({ techPoints: resources.techPoints - tech.cost });
-    setResearch(techId);
+    if (currentResearch) {
+      console.warn('Already researching');
+      return;
+    }
 
-    // For demo purposes, complete research after timeout
-    // In real implementation, this would be handled by server
-    setTimeout(() => {
-      unlockTech(techId);
-      setResearch(null);
-    }, tech.researchTime * 10); // Sped up for demo (10x faster)
+    // Start research via backend action system
+    const success = await startResearchActionV2(techId);
+    if (!success) {
+      console.error('Failed to start research');
+    }
+  };
+
+  const formatTime = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${secs}s`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m`;
   };
 
   const renderTechNode = (tech: TechNode) => {
@@ -51,6 +94,7 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
     const isResearching = currentResearch === tech.id;
     const canResearch = canResearchTech(tech.id, unlockedTechs);
     const canAfford = resources.techPoints >= tech.cost;
+    const { progress, timeRemaining } = isResearching ? getResearchProgress() : { progress: 0, timeRemaining: 0 };
 
     let statusClass = 'border-gray-700 bg-gray-800/50';
     let statusText = '';
@@ -59,8 +103,8 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
       statusClass = 'border-green-500 bg-green-900/30';
       statusText = 'Researched';
     } else if (isResearching) {
-      statusClass = 'border-cyan-500 bg-cyan-900/30 animate-pulse';
-      statusText = 'Researching...';
+      statusClass = 'border-cyan-500 bg-cyan-900/30';
+      statusText = `${Math.floor(progress)}%`;
     } else if (!canResearch) {
       statusClass = 'border-gray-800 bg-gray-900/50 opacity-50';
       statusText = 'Locked';
@@ -84,7 +128,7 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
 
         <div className="flex items-center justify-between text-xs">
           <span className="text-gray-500">
-            Cost: <span className={canAfford ? 'text-cyan-400' : 'text-red-400'}>{tech.cost} TP</span>
+            Cost: <span className={canAfford || isUnlocked ? 'text-cyan-400' : 'text-red-400'}>{tech.cost} TP</span>
           </span>
           {statusText && (
             <span
@@ -101,7 +145,23 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
           )}
         </div>
 
-        {tech.prerequisites.length > 0 && !isUnlocked && (
+        {/* Research Progress Bar */}
+        {isResearching && (
+          <div className="mt-2">
+            <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between mt-1 text-xs text-cyan-400">
+              <span>Researching...</span>
+              <span>{formatTime(timeRemaining)}</span>
+            </div>
+          </div>
+        )}
+
+        {tech.prerequisites.length > 0 && !isUnlocked && !isResearching && (
           <div className="mt-2 text-xs text-gray-500">
             Requires:{' '}
             {tech.prerequisites.map((prereq) => (
@@ -117,13 +177,13 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
           </div>
         )}
 
-        {tech.unlocks.length > 0 && (
+        {tech.unlocks.length > 0 && !isResearching && (
           <div className="mt-1 text-xs text-gray-500">
             Unlocks: <span className="text-cyan-400">{tech.unlocks.join(', ')}</span>
           </div>
         )}
 
-        {!isUnlocked && !isResearching && canResearch && (
+        {!isUnlocked && !isResearching && canResearch && !currentResearch && (
           <button
             onClick={() => handleStartResearch(tech.id)}
             disabled={!canAfford}
@@ -133,7 +193,7 @@ export function TechTreePanel({ onClose }: TechTreePanelProps) {
                 : 'bg-gray-700 text-gray-400 cursor-not-allowed'
             }`}
           >
-            Research
+            Research ({formatTime(tech.researchTime)})
           </button>
         )}
       </div>

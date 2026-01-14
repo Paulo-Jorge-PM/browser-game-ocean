@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { GameCanvas } from './game/core/GameCanvas';
 import { ResourceBar } from './components/hud/ResourceBar';
 import { BottomPanel } from './components/game/BottomPanel';
@@ -6,94 +6,81 @@ import { ConnectionStatus } from './components/hud/ConnectionStatus';
 import { TechTreePanel } from './components/game/TechTreePanel';
 import { WorldMapPanel } from './components/game/WorldMapPanel';
 import { RankingsPanel } from './components/game/RankingsPanel';
-import { useGameStore, startResourceTick, stopResourceTick } from './stores/gameStore';
+import { AdminPanel } from './components/game/AdminPanel';
+import {
+  useGameStore,
+  startResourceTick,
+  startResourceSyncInterval,
+  stopAllIntervals,
+} from './stores/gameStore';
 import { socketService } from './services/socket';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { bootstrapDevCityV2 } from './services/api';
 
 function App() {
-  const { placeBase, calculateResourceRates, unlockTech, ui, setActivePanel, hydrateFromServer } = useGameStore();
+  const { ui, setActivePanel, hydrateFromBootstrapV2 } = useGameStore();
   const [isLoading, setIsLoading] = useState(true);
+  const wasDisconnectedRef = useRef(false);
 
   useEffect(() => {
     const initializeGame = async () => {
-      // Check for existing city ID in localStorage
-      const savedCityId = localStorage.getItem('ocean_city_id');
+      try {
+        // Use the new bootstrap v2 endpoint which:
+        // - Auto-completes expired pending actions
+        // - Returns sync config
+        // - Returns pending actions for timer restoration
+        const response = await bootstrapDevCityV2();
 
-      if (savedCityId) {
-        // Try to load existing city from backend
-        try {
-          const response = await fetch(`${API_URL}/api/v1/cities/${savedCityId}`);
-          if (response.ok) {
-            const cityData = await response.json();
-            // Hydrate state from server
-            hydrateFromServer({
-              city_id: cityData.id,
-              name: cityData.name,
-              grid: cityData.grid,
-              resources: cityData.resources,
-              resource_capacity: cityData.resource_capacity,
-            });
-            console.log('Loaded existing city:', cityData.name);
+        // Hydrate from v2 response (includes city state, pending actions, sync config)
+        hydrateFromBootstrapV2(response);
+        localStorage.setItem('ocean_city_id', response.city.city_id);
 
-            // Connect socket and join city room
-            socketService.connect();
-            socketService.joinCity(savedCityId);
+        // Connect socket for real-time updates (but most sync happens via REST now)
+        socketService.connect();
+        socketService.joinCity(response.city.city_id);
 
-            setIsLoading(false);
-            startResourceTick();
-            return;
-          } else {
-            console.log('City not found on server, creating new...');
-            localStorage.removeItem('ocean_city_id');
-          }
-        } catch (error) {
-          console.error('Failed to load city from server:', error);
-          // Fall through to local initialization
-        }
+        setIsLoading(false);
+
+        // Start local resource tick (100ms for smooth UI)
+        startResourceTick();
+
+        // Start resource sync interval with server (configurable, default 30s)
+        startResourceSyncInterval(response.sync_config.resource_sync_interval_seconds);
+
+      } catch (error) {
+        console.error('Failed to bootstrap dev city:', error);
+        setIsLoading(false);
       }
-
-      // No saved city or failed to load - initialize locally
-      initializeLocalGame();
-      setIsLoading(false);
-
-      // Connect to socket
-      socketService.connect();
-    };
-
-    const initializeLocalGame = () => {
-      // Initialize with command ship on first load
-      const commandShip = {
-        id: 'command-ship-1',
-        type: 'command_ship' as const,
-        position: { x: 5, y: 0 },
-        level: 1,
-        constructionProgress: 100,
-        isOperational: true,
-        workers: 5,
-      };
-      placeBase({ x: 5, y: 0 }, commandShip);
-
-      // Unlock starter techs
-      unlockTech('basic_construction');
-      unlockTech('life_support');
-      unlockTech('power_generation');
-      unlockTech('storage_systems');
-
-      // Calculate initial resource rates
-      calculateResourceRates();
-
-      // Start resource tick
-      startResourceTick();
     };
 
     initializeGame();
 
     return () => {
-      stopResourceTick();
+      stopAllIntervals();
       socketService.disconnect();
     };
   }, []);
+
+  // Handle reconnection recovery
+  useEffect(() => {
+    const unsubscribe = socketService.onStatusChange(async (status) => {
+      if (status === 'disconnected') {
+        wasDisconnectedRef.current = true;
+      } else if (status === 'connected' && wasDisconnectedRef.current) {
+        // Reconnected after being disconnected - re-bootstrap to get fresh state
+        console.log('Reconnected - re-bootstrapping game state...');
+        wasDisconnectedRef.current = false;
+        try {
+          const response = await bootstrapDevCityV2();
+          hydrateFromBootstrapV2(response);
+          console.log('Game state recovered after reconnection');
+        } catch (error) {
+          console.error('Failed to recover game state after reconnection:', error);
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [hydrateFromBootstrapV2]);
 
   if (isLoading) {
     return (
@@ -124,6 +111,9 @@ function App() {
       )}
       {ui.activePanel === 'rankings' && (
         <RankingsPanel onClose={() => setActivePanel('none')} />
+      )}
+      {ui.activePanel === 'admin' && (
+        <AdminPanel onClose={() => setActivePanel('none')} />
       )}
     </div>
   );

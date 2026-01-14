@@ -5,13 +5,14 @@ from ..core.security import decode_token
 from ..core.database import get_database
 
 # Create Socket.IO server with heartbeat settings
+# Note: ping_timeout should be longer than ping_interval to avoid false disconnections
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins="*",
     logger=True,
     engineio_logger=True,
     ping_interval=25,
-    ping_timeout=20,
+    ping_timeout=60,  # Was 20, caused false disconnections when network was slow
 )
 
 

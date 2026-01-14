@@ -27,7 +27,14 @@ export const BASE_DEFINITIONS: Record<BaseType, BaseDefinition> = {
     icon: '🚢',
     color: 0xffd700,
     cost: {},
-    production: { energy: 5, minerals: 2, food: 1, oxygen: 2, water: 2 }, // Slow but constant
+    production: {
+      energy: 50,
+      minerals: 50,
+      food: 50,
+      oxygen: 50,
+      water: 50,
+      techPoints: 50,
+    },
     consumption: {},
     buildTime: 0,
     workersRequired: 5,

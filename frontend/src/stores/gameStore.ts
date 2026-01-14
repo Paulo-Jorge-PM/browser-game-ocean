@@ -1,5 +1,14 @@
 import { create } from 'zustand';
 import type { Resources, GridCell, GridPosition, Base, UIState, BaseType, CellZone } from '../types/game';
+import {
+  startAction,
+  completeAction,
+  syncResources,
+  type ServerCityState,
+  type BootstrapV2Response,
+  type SyncConfig,
+  type PendingAction,
+} from '../services/api';
 import { BASE_DEFINITIONS, canAffordBase, deductBaseCost, getOppositeSide } from '../game/constants/bases';
 import type { ConnectionSide } from '../game/constants/bases';
 
@@ -14,6 +23,29 @@ const getZoneForDepth = (depth: number): CellZone => {
 // Visibility constants
 const VISIBILITY_BUFFER = 5; // Cells visible past furthest structure
 const INITIAL_VISIBLE_ROWS = 8; // Rows visible at game start
+
+interface ConstructionEntry {
+  baseType: BaseType;
+  startTime: number;
+  endTime: number;
+  actionId?: string | null;
+  isCompleting?: boolean;
+}
+
+// Pending action from server (event-driven architecture)
+interface ServerPendingAction {
+  actionId: string;
+  actionType: string;
+  startedAt: number; // Timestamp
+  endsAt: number; // Timestamp
+  durationSeconds: number;
+  data: {
+    baseType?: string;
+    position?: { x: number; y: number };
+    baseId?: string;
+    techId?: string;
+  };
+}
 
 interface GameState {
   // City info
@@ -37,7 +69,12 @@ interface GameState {
   researchProgress: number;
 
   // Construction queue
-  constructionQueue: Map<string, { baseType: BaseType; startTime: number; endTime: number }>;
+  constructionQueue: Map<string, ConstructionEntry>;
+
+  // Event-driven sync state (new)
+  syncConfig: SyncConfig | null;
+  serverPendingActions: Map<string, ServerPendingAction>;
+  lastResourceSyncTime: number;
 
   // Viewport/Scroll state
   scrollOffset: number; // Current scroll position in pixels
@@ -76,32 +113,15 @@ interface GameState {
 
   // Server state hydration
   hydrateFromServer: (serverState: ServerCityState) => void;
-}
 
-// Type for server city state
-interface ServerCityState {
-  city_id: string;
-  name: string;
-  grid: ServerGridCell[][];
-  resources: Record<string, number>;
-  resource_capacity?: Record<string, number>;
-}
-
-interface ServerGridCell {
-  position: { x: number; y: number };
-  base: ServerBase | null;
-  is_unlocked: boolean;
-  depth: number;
-}
-
-interface ServerBase {
-  id: string;
-  type: BaseType;
-  position: { x: number; y: number };
-  level: number;
-  construction_progress: number;
-  is_operational: boolean;
-  workers: number;
+  // Event-driven sync actions (new)
+  setSyncConfig: (config: SyncConfig) => void;
+  startBuildActionV2: (position: GridPosition, baseType: BaseType) => Promise<boolean>;
+  startResearchActionV2: (techId: string) => Promise<boolean>;
+  completeActionV2: (actionId: string) => Promise<void>;
+  syncResourcesWithServer: () => Promise<void>;
+  hydrateFromBootstrapV2: (response: BootstrapV2Response) => void;
+  setupPendingActionTimers: (pendingActions: PendingAction[]) => void;
 }
 
 const initialResources: Resources = {
@@ -191,6 +211,11 @@ export const useGameStore = create<GameState>((set, get) => ({
   researchProgress: 0,
   constructionQueue: new Map(),
   lastTickTime: Date.now(),
+
+  // Event-driven sync state (new)
+  syncConfig: null,
+  serverPendingActions: new Map(),
+  lastResourceSyncTime: Date.now(),
 
   // Viewport state
   scrollOffset: 0,
@@ -586,11 +611,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   updateConstructionProgress: () => {
     const state = get();
     const now = Date.now();
-    let hasCompletions = false;
     const newQueue = new Map(state.constructionQueue);
-    const completedPositions: { pos: GridPosition; baseType: BaseType }[] = [];
+    const completions: { baseId: string; actionId?: string; position: GridPosition }[] = [];
 
-    // First pass: Update progress and identify completions
+    // Update progress and identify completions without mutating operational state.
     const newGrid = state.grid.map((row) =>
       row.map((cell) => {
         if (cell.base && !cell.base.isOperational) {
@@ -600,29 +624,21 @@ export const useGameStore = create<GameState>((set, get) => ({
             const total = construction.endTime - construction.startTime;
             const progress = Math.min(100, (elapsed / total) * 100);
 
-            if (progress >= 100) {
-              // Complete construction atomically in the same pass
-              hasCompletions = true;
-              newQueue.delete(cell.base.id);
-              completedPositions.push({ pos: cell.position, baseType: cell.base.type });
-
-              const definition = BASE_DEFINITIONS[cell.base.type];
-              return {
-                ...cell,
-                base: {
-                  ...cell.base,
-                  constructionProgress: 100,
-                  isOperational: true,
-                  workers: definition.workersRequired,
-                },
-              };
+            if (progress >= 100 && !construction.isCompleting) {
+              construction.isCompleting = true;
+              newQueue.set(cell.base.id, { ...construction });
+              completions.push({
+                baseId: cell.base.id,
+                actionId: cell.base.actionId ?? undefined,
+                position: cell.position,
+              });
             }
 
             return {
               ...cell,
               base: {
                 ...cell.base,
-                constructionProgress: progress,
+                constructionProgress: Math.min(100, progress),
               },
             };
           }
@@ -631,42 +647,24 @@ export const useGameStore = create<GameState>((set, get) => ({
       })
     );
 
-    // Second pass: Unlock adjacent cells for completed bases
-    if (hasCompletions) {
-      for (const { pos, baseType } of completedPositions) {
-        const definition = BASE_DEFINITIONS[baseType];
-        const adjacentPositions = [
-          { adjPos: { x: pos.x, y: pos.y - 1 }, side: 'top' as ConnectionSide },
-          { adjPos: { x: pos.x, y: pos.y + 1 }, side: 'bottom' as ConnectionSide },
-          { adjPos: { x: pos.x - 1, y: pos.y }, side: 'left' as ConnectionSide },
-          { adjPos: { x: pos.x + 1, y: pos.y }, side: 'right' as ConnectionSide },
-        ];
-
-        for (const { adjPos, side } of adjacentPositions) {
-          if (
-            adjPos.y >= 0 &&
-            adjPos.y < state.gridHeight &&
-            adjPos.x >= 0 &&
-            adjPos.x < state.gridWidth &&
-            definition.connectionSides.includes(side)
-          ) {
-            newGrid[adjPos.y][adjPos.x] = {
-              ...newGrid[adjPos.y][adjPos.x],
-              isUnlocked: true,
-            };
-          }
-        }
-      }
-    }
-
     // Single atomic state update
     set({ grid: newGrid, constructionQueue: newQueue });
 
-    // Recalculate resource rates and visibility after state is updated
-    if (hasCompletions) {
-      get().calculateResourceRates();
-      get().updateMaxVisibleDepth();
+    if (completions.length === 0) {
+      return;
     }
+
+    // Use the new event-driven action completion flow
+    completions.forEach((completion) => {
+      if (completion.actionId) {
+        // New flow: complete via action system
+        get().completeActionV2(completion.actionId);
+      } else {
+        // Fallback: complete construction locally (for legacy builds without actionId)
+        console.warn('No actionId for construction, completing locally:', completion.baseId);
+        get().completeConstruction(completion.position);
+      }
+    });
   },
 
   unlockTech: (techId) =>
@@ -723,25 +721,56 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ visibleRowCount: count }),
 
   hydrateFromServer: (serverState) => {
-    const { city_id, name, grid: serverGrid, resources: serverResources, resource_capacity } = serverState;
+    const { city_id, name, grid: serverGrid, resources: serverResources, resource_capacity, unlocked_techs, current_research } = serverState;
 
     // Convert server grid format to client format
     const hydratedGrid: GridCell[][] = [];
+    const newQueue = new Map<string, ConstructionEntry>();
+    const now = Date.now();
+
     for (let y = 0; y < serverGrid.length; y++) {
       const row: GridCell[] = [];
       for (let x = 0; x < serverGrid[y].length; x++) {
         const serverCell = serverGrid[y][x];
-        const clientBase: Base | null = serverCell.base
-          ? {
-              id: serverCell.base.id,
-              type: serverCell.base.type as BaseType,
-              position: { x: serverCell.base.position.x, y: serverCell.base.position.y },
-              level: serverCell.base.level,
-              constructionProgress: serverCell.base.construction_progress,
-              isOperational: serverCell.base.is_operational,
-              workers: serverCell.base.workers,
-            }
-          : null;
+        let clientBase: Base | null = null;
+
+        if (serverCell.base) {
+          const startedAt = serverCell.base.construction_started_at
+            ? Date.parse(serverCell.base.construction_started_at)
+            : null;
+          const endsAt = serverCell.base.construction_ends_at
+            ? Date.parse(serverCell.base.construction_ends_at)
+            : null;
+          const isOperational = serverCell.base.is_operational;
+          let progress = serverCell.base.construction_progress;
+
+          if (!isOperational && startedAt && endsAt && endsAt > startedAt) {
+            const elapsed = Math.max(0, Math.min(now - startedAt, endsAt - startedAt));
+            progress = Math.min(100, (elapsed / (endsAt - startedAt)) * 100);
+          }
+
+          clientBase = {
+            id: serverCell.base.id,
+            type: serverCell.base.type as BaseType,
+            position: { x: serverCell.base.position.x, y: serverCell.base.position.y },
+            level: serverCell.base.level,
+            constructionProgress: progress,
+            isOperational,
+            workers: serverCell.base.workers,
+            actionId: serverCell.base.action_id ?? null,
+            constructionStartedAt: startedAt,
+            constructionEndsAt: endsAt,
+          };
+
+          if (!isOperational && startedAt && endsAt) {
+            newQueue.set(serverCell.base.id, {
+              baseType: serverCell.base.type as BaseType,
+              startTime: startedAt,
+              endTime: endsAt,
+              actionId: serverCell.base.action_id ?? null,
+            });
+          }
+        }
 
         row.push({
           position: { x: serverCell.position.x, y: serverCell.position.y },
@@ -777,6 +806,14 @@ export const useGameStore = create<GameState>((set, get) => ({
         }
       : initialCapacity;
 
+    // Default unlocked techs (Tier 1)
+    const defaultUnlockedTechs = [
+      'basic_construction',
+      'life_support',
+      'power_generation',
+      'storage_systems',
+    ];
+
     set({
       cityId: city_id,
       cityName: name,
@@ -785,19 +822,394 @@ export const useGameStore = create<GameState>((set, get) => ({
       gridHeight: hydratedGrid.length || 15,
       resources: hydratedResources,
       resourceCapacity: hydratedCapacity,
-      constructionQueue: new Map(), // Clear construction queue on hydration
+      constructionQueue: newQueue,
+      unlockedTechs: unlocked_techs || defaultUnlockedTechs,
+      currentResearch: current_research || null,
     });
 
     // Recalculate derived state
     get().calculateResourceRates();
     get().updateMaxVisibleDepth();
 
-    console.log(`Hydrated city state: ${name} (${city_id})`);
+    console.log(`Hydrated city state: ${name} (${city_id}), unlocked techs: ${(unlocked_techs || defaultUnlockedTechs).length}`);
+  },
+
+  // ============================================
+  // Event-Driven Sync Methods (New)
+  // ============================================
+
+  setSyncConfig: (config) => set({ syncConfig: config }),
+
+  startBuildActionV2: async (position, baseType) => {
+    const state = get();
+    const cityId = state.cityId;
+
+    if (!cityId) {
+      console.error('No city ID set');
+      return false;
+    }
+
+    // Validate locally first
+    const result = state.canBuildAt(position, baseType);
+    if (!result.canBuild) {
+      console.warn('Cannot build:', result.reason);
+      return false;
+    }
+
+    try {
+      // Call backend to start action
+      const response = await startAction(cityId, 'build', {
+        base_type: baseType,
+        position: { x: position.x, y: position.y },
+      });
+
+      const startedAt = Date.parse(response.started_at);
+      const endsAt = Date.parse(response.ends_at);
+
+      // Create base in construction state
+      const newBase: Base = {
+        id: response.action_id, // Use action_id as base id for now
+        type: baseType,
+        position,
+        level: 1,
+        constructionProgress: 0,
+        isOperational: false,
+        workers: 0,
+        actionId: response.action_id,
+        constructionStartedAt: startedAt,
+        constructionEndsAt: endsAt,
+      };
+
+      // Update grid
+      const newGrid = state.grid.map((row) => row.map((cell) => ({ ...cell })));
+      newGrid[position.y][position.x] = {
+        ...newGrid[position.y][position.x],
+        base: newBase,
+      };
+
+      // Add to construction queue
+      const newQueue = new Map(state.constructionQueue);
+      newQueue.set(response.action_id, {
+        baseType,
+        startTime: startedAt,
+        endTime: endsAt,
+        actionId: response.action_id,
+      });
+
+      // Add to server pending actions
+      const newPendingActions = new Map(state.serverPendingActions);
+      newPendingActions.set(response.action_id, {
+        actionId: response.action_id,
+        actionType: 'build',
+        startedAt,
+        endsAt,
+        durationSeconds: response.duration_seconds,
+        data: {
+          baseType,
+          position: { x: position.x, y: position.y },
+        },
+      });
+
+      // Update resources from server response
+      const newResources: Resources = {
+        population: response.resources.population || state.resources.population,
+        food: response.resources.food || state.resources.food,
+        oxygen: response.resources.oxygen || state.resources.oxygen,
+        water: response.resources.water || state.resources.water,
+        energy: response.resources.energy || state.resources.energy,
+        minerals: response.resources.minerals || state.resources.minerals,
+        techPoints: response.resources.tech_points || state.resources.techPoints,
+      };
+
+      set({
+        grid: newGrid,
+        constructionQueue: newQueue,
+        serverPendingActions: newPendingActions,
+        resources: newResources,
+        ui: { ...state.ui, selectedCell: null, selectedBase: null, activePanel: 'none' },
+      });
+
+      console.log(`Started build action: ${baseType} at (${position.x}, ${position.y}), action_id: ${response.action_id}`);
+      return true;
+
+    } catch (error) {
+      console.error('Failed to start build action:', error);
+      return false;
+    }
+  },
+
+  startResearchActionV2: async (techId) => {
+    const state = get();
+    const cityId = state.cityId;
+
+    if (!cityId) {
+      console.error('No city ID set');
+      return false;
+    }
+
+    // Check if already researching
+    if (state.currentResearch) {
+      console.warn('Already researching:', state.currentResearch);
+      return false;
+    }
+
+    // Check if already unlocked
+    if (state.unlockedTechs.includes(techId)) {
+      console.warn('Tech already unlocked:', techId);
+      return false;
+    }
+
+    try {
+      // Call backend to start research action
+      const response = await startAction(cityId, 'research', {
+        tech_id: techId,
+      });
+
+      const startedAt = Date.parse(response.started_at);
+      const endsAt = Date.parse(response.ends_at);
+
+      // Add to server pending actions
+      const newPendingActions = new Map(state.serverPendingActions);
+      newPendingActions.set(response.action_id, {
+        actionId: response.action_id,
+        actionType: 'research',
+        startedAt,
+        endsAt,
+        durationSeconds: response.duration_seconds,
+        data: {
+          techId,
+        },
+      });
+
+      // Update resources from server response
+      const newResources: Resources = {
+        population: response.resources.population ?? state.resources.population,
+        food: response.resources.food ?? state.resources.food,
+        oxygen: response.resources.oxygen ?? state.resources.oxygen,
+        water: response.resources.water ?? state.resources.water,
+        energy: response.resources.energy ?? state.resources.energy,
+        minerals: response.resources.minerals ?? state.resources.minerals,
+        techPoints: response.resources.tech_points ?? state.resources.techPoints,
+      };
+
+      set({
+        currentResearch: techId,
+        researchProgress: 0,
+        serverPendingActions: newPendingActions,
+        resources: newResources,
+      });
+
+      // Schedule completion check
+      const timeUntilComplete = endsAt - Date.now();
+      if (timeUntilComplete > 0) {
+        setTimeout(() => {
+          get().completeActionV2(response.action_id);
+        }, timeUntilComplete + 1000); // Add 1s buffer
+      }
+
+      console.log(`Started research action: ${techId}, action_id: ${response.action_id}, duration: ${response.duration_seconds}s`);
+      return true;
+
+    } catch (error) {
+      console.error('Failed to start research action:', error);
+      return false;
+    }
+  },
+
+  completeActionV2: async (actionId) => {
+    const state = get();
+
+    try {
+      const response = await completeAction(actionId);
+
+      if (response.status === 'completed') {
+        // Action completed successfully
+        console.log(`Action ${actionId} completed at ${response.completed_at}`);
+
+        // Find the pending action
+        const pendingAction = state.serverPendingActions.get(actionId);
+        if (pendingAction) {
+          if (pendingAction.actionType === 'build' && pendingAction.data.position) {
+            // Complete the construction locally
+            get().completeConstruction(pendingAction.data.position as GridPosition);
+          } else if (pendingAction.actionType === 'research' && pendingAction.data.techId) {
+            // Complete the research locally
+            const techId = pendingAction.data.techId;
+            set((state) => ({
+              unlockedTechs: [...state.unlockedTechs, techId],
+              currentResearch: null,
+              researchProgress: 0,
+            }));
+            console.log(`Research completed: ${techId}`);
+          }
+        }
+
+        // Remove from pending actions
+        const newPendingActions = new Map(state.serverPendingActions);
+        newPendingActions.delete(actionId);
+        set({ serverPendingActions: newPendingActions });
+
+      } else if (response.status === 'pending' && response.remaining_seconds) {
+        // Action not ready yet - schedule retry
+        console.log(`Action ${actionId} not ready, ${response.remaining_seconds}s remaining`);
+        setTimeout(() => {
+          get().completeActionV2(actionId);
+        }, (response.remaining_seconds + 1) * 1000);
+
+      } else if (response.status === 'failed') {
+        console.error(`Action ${actionId} failed: ${response.error}`);
+      }
+
+    } catch (error) {
+      console.error(`Failed to complete action ${actionId}:`, error);
+      // Retry after a delay
+      const retryDelay = state.syncConfig?.action_complete_retry_seconds || 3;
+      setTimeout(() => {
+        get().completeActionV2(actionId);
+      }, retryDelay * 1000);
+    }
+  },
+
+  syncResourcesWithServer: async () => {
+    const state = get();
+    const cityId = state.cityId;
+
+    if (!cityId) {
+      console.warn('No city ID set, skipping resource sync');
+      return;
+    }
+
+    try {
+      // Round to integers - backend expects int, but local tick produces floats
+      const response = await syncResources(cityId, {
+        population: Math.round(state.resources.population),
+        food: Math.round(state.resources.food),
+        oxygen: Math.round(state.resources.oxygen),
+        water: Math.round(state.resources.water),
+        energy: Math.round(state.resources.energy),
+        minerals: Math.round(state.resources.minerals),
+        tech_points: Math.round(state.resources.techPoints),
+      });
+
+      // Update resources from server (server is source of truth)
+      const newResources: Resources = {
+        population: response.resources.population || 0,
+        food: response.resources.food || 0,
+        oxygen: response.resources.oxygen || 0,
+        water: response.resources.water || 0,
+        energy: response.resources.energy || 0,
+        minerals: response.resources.minerals || 0,
+        techPoints: response.resources.tech_points || 0,
+      };
+
+      const newCapacity: Resources = {
+        population: response.capacity.population || initialCapacity.population,
+        food: response.capacity.food || initialCapacity.food,
+        oxygen: response.capacity.oxygen || initialCapacity.oxygen,
+        water: response.capacity.water || initialCapacity.water,
+        energy: response.capacity.energy || initialCapacity.energy,
+        minerals: response.capacity.minerals || initialCapacity.minerals,
+        techPoints: response.capacity.tech_points || initialCapacity.techPoints,
+      };
+
+      set({
+        resources: newResources,
+        resourceCapacity: newCapacity,
+        lastResourceSyncTime: Date.now(),
+      });
+
+      if (response.drift_detected) {
+        console.warn('Resource drift detected:', response.drift_details);
+      } else {
+        console.log('Resources synced with server');
+      }
+
+    } catch (error) {
+      console.error('Failed to sync resources:', error);
+    }
+  },
+
+  hydrateFromBootstrapV2: (response) => {
+    const { city, pending_actions, sync_config } = response;
+
+    // First, hydrate the city state using existing method
+    get().hydrateFromServer(city);
+
+    // Set sync config
+    set({ syncConfig: sync_config });
+
+    // Setup pending action timers
+    get().setupPendingActionTimers(pending_actions);
+
+    console.log('Hydrated from bootstrap v2, sync_config:', sync_config);
+  },
+
+  setupPendingActionTimers: (pendingActions) => {
+    const now = Date.now();
+    const newPendingActions = new Map<string, ServerPendingAction>();
+    const newQueue = new Map<string, ConstructionEntry>();
+    let researchTechId: string | null = null;
+
+    for (const action of pendingActions) {
+      const startedAt = Date.parse(action.started_at);
+      const endsAt = Date.parse(action.ends_at);
+
+      newPendingActions.set(action.action_id, {
+        actionId: action.action_id,
+        actionType: action.action_type,
+        startedAt,
+        endsAt,
+        durationSeconds: action.duration_seconds,
+        data: {
+          baseType: action.data.base_type,
+          position: action.data.position,
+          baseId: action.data.base_id,
+          techId: action.data.tech_id,
+        },
+      });
+
+      // Add to construction queue if it's a build action
+      if (action.action_type === 'build' && action.data.base_type) {
+        newQueue.set(action.action_id, {
+          baseType: action.data.base_type as BaseType,
+          startTime: startedAt,
+          endTime: endsAt,
+          actionId: action.action_id,
+        });
+      }
+
+      // Track research action
+      if (action.action_type === 'research' && action.data.tech_id) {
+        researchTechId = action.data.tech_id;
+      }
+
+      // Schedule completion check
+      const timeUntilComplete = endsAt - now;
+      if (timeUntilComplete > 0) {
+        setTimeout(() => {
+          get().completeActionV2(action.action_id);
+        }, timeUntilComplete + 1000); // Add 1s buffer
+      } else {
+        // Already past completion time, try to complete now
+        get().completeActionV2(action.action_id);
+      }
+    }
+
+    set({
+      serverPendingActions: newPendingActions,
+      constructionQueue: newQueue,
+      currentResearch: researchTechId,
+    });
+
+    console.log(`Setup ${pendingActions.length} pending action timers`);
   },
 }));
 
-// Resource tick interval
+// Resource tick interval (local UI updates)
 let tickInterval: number | null = null;
+
+// Resource sync interval (server sync)
+let syncInterval: number | null = null;
 
 export const startResourceTick = () => {
   if (tickInterval) return;
@@ -819,4 +1231,33 @@ export const stopResourceTick = () => {
     clearInterval(tickInterval);
     tickInterval = null;
   }
+};
+
+// Start periodic resource sync with server
+export const startResourceSyncInterval = (intervalSeconds?: number) => {
+  if (syncInterval) return;
+
+  // Use provided interval or get from sync config or default to 30 seconds
+  const state = useGameStore.getState();
+  const syncIntervalMs = (intervalSeconds || state.syncConfig?.resource_sync_interval_seconds || 30) * 1000;
+
+  console.log(`Starting resource sync interval: ${syncIntervalMs / 1000}s`);
+
+  syncInterval = window.setInterval(() => {
+    const store = useGameStore.getState();
+    store.syncResourcesWithServer();
+  }, syncIntervalMs);
+};
+
+export const stopResourceSyncInterval = () => {
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
+};
+
+// Stop all intervals
+export const stopAllIntervals = () => {
+  stopResourceTick();
+  stopResourceSyncInterval();
 };

@@ -1,6 +1,9 @@
 version: '3.8'
 
 services:
+  # ============================================
+  # Infrastructure Services
+  # ============================================
   mongodb:
     image: mongo:7
     container_name: ocean-depths-mongodb
@@ -12,6 +15,11 @@ services:
       - MONGO_INITDB_DATABASE=ocean_depths
     networks:
       - ocean-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -23,8 +31,77 @@ services:
     command: redis-server --appendonly yes
     networks:
       - ocean-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Optional: MongoDB admin UI
+  # ============================================
+  # Application Services
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: ocean-depths-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source code for hot reload
+      - ./backend/app:/app/app:cached
+      # Prevent overwriting installed packages
+      - /app/.venv
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=ocean_depths
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=true
+      - DEV_MODE=true
+      - DEV_USER_EMAIL=dev@oceandepths.local
+      - DEV_USER_USERNAME=DevPlayer
+      - DEV_USER_PASSWORD=devpassword123
+      - DEV_USER_REGION=EU
+      - DEV_USER_COUNTRY=Germany
+      - JWT_SECRET_KEY=dev-secret-key-change-in-production
+      - JWT_ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=1440
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ocean-network
+    profiles:
+      - app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: ocean-depths-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src:cached
+      - ./frontend/public:/app/public:cached
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - ocean-network
+    profiles:
+      - app
+
+  # ============================================
+  # Admin Tools (optional)
+  # ============================================
   mongo-express:
     image: mongo-express
     container_name: ocean-depths-mongo-express
@@ -34,13 +111,13 @@ services:
       - ME_CONFIG_MONGODB_URL=mongodb://mongodb:27017
       - ME_CONFIG_BASICAUTH=false
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     networks:
       - ocean-network
     profiles:
       - admin
 
-  # Optional: Redis admin UI
   redis-commander:
     image: rediscommander/redis-commander
     container_name: ocean-depths-redis-commander
@@ -49,7 +126,8 @@ services:
     environment:
       - REDIS_HOSTS=local:redis:6379
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     networks:
       - ocean-network
     profiles:

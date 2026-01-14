@@ -12,6 +12,7 @@ class SocketService {
   private maxReconnectAttempts = 10;
   private currentCityId: string | null = null;
   private statusCallbacks: Set<(status: ConnectionStatus) => void> = new Set();
+  private wasConnectedBefore = false; // Track if this is initial connect or reconnect
 
   connect(token?: string) {
     if (this.socket?.connected) return;
@@ -39,14 +40,36 @@ class SocketService {
       // Re-join city room on reconnect
       if (this.currentCityId) {
         this.joinCity(this.currentCityId);
-        // Request fresh state from server
-        this.requestCityState(this.currentCityId);
+
+        // Only request city state on RECONNECT, not initial connect
+        // Initial connect uses REST API bootstrap (bootstrapDevCityV2)
+        if (this.wasConnectedBefore) {
+          console.log('Reconnected - requesting fresh city state');
+          this.requestCityState(this.currentCityId);
+        }
       }
+
+      this.wasConnectedBefore = true;
     });
 
     this.socket.on('disconnect', (reason) => {
       console.log('Disconnected:', reason);
       this.notifyStatusChange('disconnected');
+
+      // Handle different disconnect reasons
+      if (reason === 'io server disconnect') {
+        // Server disconnected us - reconnect manually
+        console.log('Server disconnected us, attempting reconnect...');
+        this.socket?.connect();
+      }
+      // 'io client disconnect' means we called disconnect()
+      // 'ping timeout' means connection lost - socket.io auto-reconnects
+      // 'transport close' means network issue - socket.io auto-reconnects
+    });
+
+    this.socket.on('error', (error) => {
+      console.error('Socket error:', error);
+      // Don't crash - just log and let reconnection handle it
     });
 
     this.socket.on('reconnecting', () => {
@@ -187,6 +210,7 @@ class SocketService {
     this.socket?.disconnect();
     this.socket = null;
     this.currentCityId = null;
+    this.wasConnectedBefore = false; // Reset for next fresh connection
   }
 
   isConnected(): boolean {

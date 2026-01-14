@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     grid_default_width: int = 10
     grid_default_height: int = 15
 
+    # Event-driven sync settings
+    resource_sync_interval_seconds: int = 30  # How often frontend syncs with backend
+    error_tolerance_seconds: int = 5  # Tolerance for resource drift (in seconds of production)
+    action_complete_retry_seconds: int = 3  # Seconds to wait before retrying action completion
+
+    # Dev profile (hardcoded user)
+    dev_user_email: str = "dev@ocean.local"
+    dev_user_username: str = "dev_player"
+    dev_user_password: str = "dev-password"
+    dev_user_region: str = "Atlantis"
+    dev_user_country: str = "Ocean"
+    dev_city_name: str = "Ocean Depths"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

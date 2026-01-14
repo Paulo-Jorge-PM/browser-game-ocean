@@ -5,12 +5,36 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from .config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha256", "bcrypt"],
+    default="pbkdf2_sha256",
+    deprecated="auto",
+)
 security = HTTPBearer()
 
 
+def _normalize_bcrypt_password(password: str) -> str:
+    # bcrypt only considers the first 72 bytes; truncate to avoid runtime errors.
+    encoded = password.encode("utf-8")
+    if len(encoded) <= 72:
+        return password
+    return encoded[:72].decode("utf-8", errors="ignore")
+
+
+def _is_bcrypt_hash(hashed_password: str) -> bool:
+    return hashed_password.startswith("$2a$") or hashed_password.startswith("$2b$") or hashed_password.startswith("$2y$")
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    candidate = (
+        _normalize_bcrypt_password(plain_password)
+        if _is_bcrypt_hash(hashed_password)
+        else plain_password
+    )
+    try:
+        return pwd_context.verify(candidate, hashed_password)
+    except Exception:
+        return False
 
 
 def get_password_hash(password: str) -> str:

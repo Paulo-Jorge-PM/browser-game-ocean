@@ -1,8 +1,52 @@
-[project]
+[tool.poetry]
 name = "ocean-depths-backend"
 version = "0.1.0"
 description = "Backend for Ocean Depths underwater city builder MMO"
-requires-python = ">=3.11"
+authors = ["Ocean Depths Team"]
+readme = "README.md"
+packages = [{ include = "app" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+# FastAPI and server
+fastapi = "^0.115.6"
+uvicorn = { extras = ["standard"], version = "^0.34.0" }
+python-multipart = "^0.0.20"
+# WebSocket support
+python-socketio = "^5.12.1"
+# Database
+motor = "^3.7.0"
+pymongo = "^4.10.1"
+# Redis
+redis = "^5.2.1"
+# Authentication
+python-jose = { extras = ["cryptography"], version = "^3.3.0" }
+passlib = { extras = ["bcrypt"], version = "^1.7.4" }
+# Validation & Settings
+pydantic = { extras = ["email"], version = "^2.10.4" }
+pydantic-settings = "^2.7.1"
+email-validator = "^2.1.1"
+# Background tasks
+celery = "^5.4.0"
+# Utilities
+python-dotenv = "^1.0.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^6.0.0"
+httpx = "^0.28.0"
+black = "^24.0.0"
+isort = "^5.13.0"
+mypy = "^1.14.0"
+ruff = "^0.8.0"
+
+[tool.poetry.scripts]
+dev = "uvicorn app.main:socket_app --reload --host 0.0.0.0 --port 8000"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
 [tool.black]
 line-length = 100
@@ -12,8 +56,20 @@ target-version = ["py311"]
 profile = "black"
 line_length = 100
 
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

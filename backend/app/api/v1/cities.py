@@ -1,36 +1,17 @@
 from fastapi import APIRouter, HTTPException, status, Depends
-from datetime import datetime, timezone
 from bson import ObjectId
-import uuid
 
 from ...core.database import get_database
 from ...core.security import get_current_user
-from ...core.config import settings
-from ...models.city import City, CityCreate, GridCell, GridPosition, Base
+from ...services.city_service import build_new_city_document
+from .schemas import V1City, V1CityCreate, V1Base
 
 router = APIRouter()
 
 
-def create_empty_grid(width: int, height: int) -> list[list[dict]]:
-    """Create an empty grid with only the surface row unlocked."""
-    grid = []
-    for y in range(height):
-        row = []
-        for x in range(width):
-            cell = {
-                "position": {"x": x, "y": y},
-                "base": None,
-                "is_unlocked": y == 0,  # Only surface is unlocked
-                "depth": y,
-            }
-            row.append(cell)
-        grid.append(row)
-    return grid
-
-
-@router.post("/", response_model=City)
+@router.post("/", response_model=V1City)
 async def create_city(
-    city_data: CityCreate,
+    city_data: V1CityCreate,
     current_user: dict = Depends(get_current_user),
 ):
     db = get_database()
@@ -44,56 +25,7 @@ async def create_city(
             detail="Player already has a city",
         )
 
-    # Create the grid
-    grid = create_empty_grid(settings.grid_default_width, settings.grid_default_height)
-
-    # Place command ship at center of surface
-    center_x = settings.grid_default_width // 2
-    command_ship = {
-        "id": str(uuid.uuid4()),
-        "type": "command_ship",
-        "position": {"x": center_x, "y": 0},
-        "level": 1,
-        "construction_progress": 100,
-        "is_operational": True,
-        "workers": 5,
-    }
-    grid[0][center_x]["base"] = command_ship
-    grid[0][center_x]["is_unlocked"] = True
-
-    # Unlock adjacent cells
-    for dx in [-1, 0, 1]:
-        nx = center_x + dx
-        if 0 <= nx < settings.grid_default_width:
-            grid[0][nx]["is_unlocked"] = True
-    if settings.grid_default_height > 1:
-        grid[1][center_x]["is_unlocked"] = True
-
-    # Create city document
-    city_doc = {
-        "name": city_data.name,
-        "player_id": player_id,
-        "grid": grid,
-        "resources": {
-            "population": 10,
-            "food": 100,
-            "oxygen": 100,
-            "water": 100,
-            "energy": 50,
-            "minerals": 50,
-            "tech_points": 0,
-        },
-        "resource_capacity": {
-            "population": 50,
-            "food": 500,
-            "oxygen": 500,
-            "water": 500,
-            "energy": 200,
-            "minerals": 200,
-            "tech_points": 1000,
-        },
-        "created_at": datetime.now(timezone.utc),
-    }
+    city_doc = build_new_city_document(city_data.name, player_id)
 
     result = await db.cities.insert_one(city_doc)
     city_id = str(result.inserted_id)
@@ -104,10 +36,10 @@ async def create_city(
         {"$set": {"city_id": city_id}},
     )
 
-    return City(id=city_id, **city_doc)
+    return V1City(id=city_id, **city_doc)
 
 
-@router.get("/{city_id}", response_model=City)
+@router.get("/{city_id}", response_model=V1City)
 async def get_city(city_id: str):
     db = get_database()
 
@@ -118,13 +50,13 @@ async def get_city(city_id: str):
             detail="City not found",
         )
 
-    return City(id=str(city_doc["_id"]), **{k: v for k, v in city_doc.items() if k != "_id"})
+    return V1City(id=str(city_doc["_id"]), **{k: v for k, v in city_doc.items() if k != "_id"})
 
 
 @router.post("/{city_id}/bases")
 async def build_base(
     city_id: str,
-    base: Base,
+    base: V1Base,
     current_user: dict = Depends(get_current_user),
 ):
     db = get_database()

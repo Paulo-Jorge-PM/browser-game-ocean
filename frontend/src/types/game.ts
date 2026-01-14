@@ -62,6 +62,9 @@ export interface Base {
   constructionProgress: number; // 0-100
   isOperational: boolean;
   workers: number;
+  actionId?: string | null;
+  constructionStartedAt?: number | null;
+  constructionEndsAt?: number | null;
 }
 
 // City
@@ -112,6 +115,6 @@ export interface RankingEntry {
 export interface UIState {
   selectedCell: GridPosition | null;
   selectedBase: Base | null;
-  activePanel: 'none' | 'build' | 'tech' | 'comms' | 'world' | 'rankings';
+  activePanel: 'none' | 'build' | 'tech' | 'comms' | 'world' | 'rankings' | 'admin';
   isAgentCommActive: boolean;
 }

@@ -7,6 +7,7 @@ const menuItems = [
   { id: 'comms', name: 'Comms', icon: '📡' },
   { id: 'world', name: 'World', icon: '🗺️' },
   { id: 'rankings', name: 'Ranks', icon: '🏆' },
+  { id: 'admin', name: 'Admin', icon: '🛠️' },
 ];
 
 function formatCost(cost: Partial<Record<string, number>>): string {
@@ -37,16 +38,23 @@ export function BottomPanel() {
     resourceConsumption,
     selectCell,
     setActivePanel,
-    startConstruction,
     demolishBase,
     canBuildAt,
+    startBuildActionV2,
   } = useGameStore();
 
   const availableBases = getAvailableBases(unlockedTechs);
 
-  const handleBuildBase = (type: BaseType) => {
+  const handleBuildBase = async (type: BaseType) => {
     if (!ui.selectedCell) return;
-    startConstruction(ui.selectedCell, type);
+
+    // Use the new event-driven build action
+    // This calls backend /actions/start, gets timestamps, and sets up local timers
+    const success = await startBuildActionV2(ui.selectedCell, type);
+
+    if (!success) {
+      console.error('Failed to start build action');
+    }
   };
 
   const handleDemolish = () => {
