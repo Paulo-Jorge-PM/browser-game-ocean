@@ -24,6 +24,7 @@ from ..core.base_definitions import (
     TECH_DEFINITIONS,
     can_research_tech,
 )
+from .grid_utils import world_y_to_index
 from ..models.action import (
     ActionType,
     ActionData,
@@ -61,12 +62,13 @@ async def start_build_action(
 
     grid = city_doc["grid"]
     x, y = position["x"], position["y"]
+    grid_y = world_y_to_index(grid, y)
 
     # Validate position
-    if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+    if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
         raise ValueError("Invalid position")
 
-    cell = grid[y][x]
+    cell = grid[grid_y][x]
     if cell.get("depth", 0) < 0:
         raise ValueError("Above-surface construction locked")
     if not cell["is_unlocked"]:
@@ -135,7 +137,7 @@ async def start_build_action(
         "construction_ends_at": end_time.isoformat(),
     }
 
-    grid[y][x]["base"] = base_doc
+    grid[grid_y][x]["base"] = base_doc
 
     # Update city in database
     await db.cities.update_one(
@@ -244,8 +246,11 @@ async def _complete_build_action(city_id: str, data: dict) -> None:
     position = data["position"]
     base_type = data["base_type"]
     x, y = position["x"], position["y"]
+    grid_y = world_y_to_index(grid, y)
+    if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
+        raise ValueError("Invalid position")
 
-    cell = grid[y][x]
+    cell = grid[grid_y][x]
     base = cell.get("base")
 
     if not base:
@@ -270,8 +275,9 @@ async def _complete_build_action(city_id: str, data: dict) -> None:
         if side not in base_def["connection_sides"]:
             continue
         nx, ny = x + dx, y + dy
-        if 0 <= ny < len(grid) and 0 <= nx < len(grid[0]):
-            grid[ny][nx]["is_unlocked"] = True
+        adj_y = world_y_to_index(grid, ny)
+        if 0 <= adj_y < len(grid) and 0 <= nx < len(grid[0]):
+            grid[adj_y][nx]["is_unlocked"] = True
 
     # Update city
     await db.cities.update_one(
@@ -486,7 +492,9 @@ async def cancel_action(action_id: str, player_id: str) -> bool:
         if city_doc:
             grid = city_doc["grid"]
             x, y = position["x"], position["y"]
-            grid[y][x]["base"] = None
+            grid_y = world_y_to_index(grid, y)
+            if 0 <= grid_y < len(grid) and 0 <= x < len(grid[0]):
+                grid[grid_y][x]["base"] = None
 
             await db.cities.update_one(
                 {"_id": ObjectId(city_id)},

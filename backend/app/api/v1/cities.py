@@ -4,6 +4,7 @@ from bson import ObjectId
 from ...core.database import get_database
 from ...core.security import get_current_user
 from ...services.city_service import build_new_city_document
+from ...services.grid_utils import world_y_to_index
 from .schemas import V1City, V1CityCreate, V1Base
 
 router = APIRouter()
@@ -74,17 +75,18 @@ async def build_base(
             detail="Not your city",
         )
 
-    x, y = base.position.x, base.position.y
     grid = city_doc["grid"]
+    x, y = base.position.x, base.position.y
+    grid_y = world_y_to_index(grid, y)
 
     # Validate position
-    if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+    if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid position",
         )
 
-    cell = grid[y][x]
+    cell = grid[grid_y][x]
     if cell.get("depth", 0) < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -103,13 +105,14 @@ async def build_base(
         )
 
     # Place the base
-    grid[y][x]["base"] = base.model_dump()
+    grid[grid_y][x]["base"] = base.model_dump()
 
     # Unlock adjacent cells
     for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
         nx, ny = x + dx, y + dy
-        if 0 <= ny < len(grid) and 0 <= nx < len(grid[0]):
-            grid[ny][nx]["is_unlocked"] = True
+        adj_y = world_y_to_index(grid, ny)
+        if 0 <= adj_y < len(grid) and 0 <= nx < len(grid[0]):
+            grid[adj_y][nx]["is_unlocked"] = True
 
     # Update city
     await db.cities.update_one(

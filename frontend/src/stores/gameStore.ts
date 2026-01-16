@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Resources, GridCell, GridPosition, Base, UIState, BaseType, CellZone } from '../types/game';
-import { SURFACE_ROW_INDEX } from '../game/constants/grid';
+import { DEFAULT_ABOVE_SURFACE_ROWS, DEFAULT_OCEAN_ROWS } from '../game/constants/grid';
 import {
   startAction,
   completeAction,
@@ -18,6 +18,24 @@ const getZoneForDepth = (depth: number): CellZone => {
   if (depth <= 0) return 'surface';
   if (depth < 5) return 'shallow';
   return 'deep';
+};
+
+const getRowOffset = (grid: GridCell[][]): number => {
+  const topWorldY = grid[0]?.[0]?.position.y;
+  if (typeof topWorldY === 'number') {
+    return -topWorldY;
+  }
+  return DEFAULT_ABOVE_SURFACE_ROWS;
+};
+
+const toGridIndex = (grid: GridCell[][], position: GridPosition): number => {
+  return position.y + getRowOffset(grid);
+};
+
+const getCellAt = (grid: GridCell[][], position: GridPosition): GridCell | null => {
+  const yIndex = toGridIndex(grid, position);
+  if (yIndex < 0 || yIndex >= grid.length) return null;
+  return grid[yIndex]?.[position.x] ?? null;
 };
 
 // Visibility constants
@@ -97,7 +115,7 @@ interface GameState {
   completeConstruction: (position: GridPosition) => void;
   demolishBase: (position: GridPosition) => void;
   placeBase: (position: GridPosition, base: Base) => void;
-  initializeGrid: (width: number, height: number) => void;
+  initializeGrid: (width: number, height: number, aboveRows?: number) => void;
   calculateResourceRates: () => void;
   applyResourceTick: (deltaSeconds: number) => void;
   updateConstructionProgress: () => void;
@@ -154,18 +172,23 @@ const zeroResources = (): Resources => ({
   techPoints: 0,
 });
 
-const createEmptyGrid = (width: number, height: number): GridCell[][] => {
+const createEmptyGrid = (
+  width: number,
+  oceanRows: number,
+  aboveSurfaceRows: number = DEFAULT_ABOVE_SURFACE_ROWS
+): GridCell[][] => {
   const grid: GridCell[][] = [];
+  const totalRows = oceanRows + aboveSurfaceRows;
 
-  // Surface sits below a small buffer of above-water rows.
-  for (let y = 0; y < height; y++) {
+  // Surface is y=0; rows above are negative.
+  for (let rowIndex = 0; rowIndex < totalRows; rowIndex++) {
     const row: GridCell[] = [];
     for (let x = 0; x < width; x++) {
-      const depth = y - SURFACE_ROW_INDEX;
+      const depth = rowIndex - aboveSurfaceRows;
       row.push({
-        position: { x, y },
+        position: { x, y: depth },
         base: null,
-        isUnlocked: false,
+        isUnlocked: depth <= 0,
         depth,
         zone: getZoneForDepth(depth),
       });
@@ -202,9 +225,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   resourceCapacity: initialCapacity,
   resourceProduction: zeroResources(),
   resourceConsumption: zeroResources(),
-  grid: createEmptyGrid(10, 15 + SURFACE_ROW_INDEX),
+  grid: createEmptyGrid(10, DEFAULT_OCEAN_ROWS, DEFAULT_ABOVE_SURFACE_ROWS),
   gridWidth: 10,
-  gridHeight: 15 + SURFACE_ROW_INDEX,
+  gridHeight: DEFAULT_OCEAN_ROWS + DEFAULT_ABOVE_SURFACE_ROWS,
   unlockedTechs: [],
   currentResearch: null,
   researchProgress: 0,
@@ -245,7 +268,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           ui: { ...state.ui, selectedCell: null, selectedBase: null, activePanel: 'none' },
         };
       }
-      const cell = state.grid[position.y]?.[position.x];
+      const cell = getCellAt(state.grid, position);
       const isUnlocked = cell?.isUnlocked || false;
       const hasBase = cell?.base != null;
 
@@ -266,7 +289,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   canBuildAt: (position, baseType) => {
     const state = get();
-    const cell = state.grid[position.y]?.[position.x];
+    const cell = getCellAt(state.grid, position);
 
     if (!cell) return { canBuild: false, reason: 'Invalid position' };
     if (cell.depth < 0) return { canBuild: false, reason: 'Above-surface construction locked' };
@@ -278,7 +301,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     let hasValidConnection = false;
 
     for (const adjPos of adjacentPositions) {
-      const adjCell = state.grid[adjPos.y]?.[adjPos.x];
+      const adjCell = getCellAt(state.grid, adjPos);
       if (adjCell?.base && adjCell.base.isOperational) {
         const direction = getDirection(adjPos, position);
         if (direction) {
@@ -324,7 +347,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       for (let x = 0; x < state.gridWidth; x++) {
         const cell = state.grid[y][x];
         if (cell.isUnlocked && !cell.base && cell.depth >= 0) {
-          buildable.push({ x, y });
+          buildable.push({ x: cell.position.x, y: cell.position.y });
         }
       }
     }
@@ -359,8 +382,10 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     // Update grid
     const newGrid = state.grid.map((row) => row.map((cell) => ({ ...cell })));
-    newGrid[position.y][position.x] = {
-      ...newGrid[position.y][position.x],
+    const yIndex = toGridIndex(state.grid, position);
+    if (!newGrid[yIndex]?.[position.x]) return false;
+    newGrid[yIndex][position.x] = {
+      ...newGrid[yIndex][position.x],
       base: newBase,
     };
 
@@ -384,7 +409,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   completeConstruction: (position) => {
     const state = get();
-    const cell = state.grid[position.y]?.[position.x];
+    const cell = getCellAt(state.grid, position);
 
     if (!cell?.base) return;
 
@@ -392,7 +417,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
 
     // Mark as operational
-    newGrid[position.y][position.x].base = {
+    const yIndex = toGridIndex(state.grid, position);
+    if (!newGrid[yIndex]?.[position.x]) return;
+    newGrid[yIndex][position.x].base = {
       ...cell.base,
       constructionProgress: 100,
       isOperational: true,
@@ -408,14 +435,15 @@ export const useGameStore = create<GameState>((set, get) => ({
     ];
 
     adjacentPositions.forEach(({ pos, side }) => {
+      const adjYIndex = toGridIndex(state.grid, pos);
       if (
-        pos.y >= 0 &&
-        pos.y < state.gridHeight &&
+        adjYIndex >= 0 &&
+        adjYIndex < state.gridHeight &&
         pos.x >= 0 &&
         pos.x < state.gridWidth &&
         definition.connectionSides.includes(side)
       ) {
-        newGrid[pos.y][pos.x].isUnlocked = true;
+        newGrid[adjYIndex][pos.x].isUnlocked = true;
       }
     });
 
@@ -434,15 +462,17 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   demolishBase: (position) => {
     const state = get();
-    const cell = state.grid[position.y]?.[position.x];
+    const cell = getCellAt(state.grid, position);
 
     if (!cell?.base || cell.base.type === 'command_ship') {
       return;
     }
 
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
-    newGrid[position.y][position.x] = {
-      ...newGrid[position.y][position.x],
+    const yIndex = toGridIndex(state.grid, position);
+    if (!newGrid[yIndex]?.[position.x]) return;
+    newGrid[yIndex][position.x] = {
+      ...newGrid[yIndex][position.x],
       base: null,
     };
 
@@ -475,9 +505,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     const state = get();
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
 
-    if (newGrid[position.y]?.[position.x]) {
-      newGrid[position.y][position.x] = {
-        ...newGrid[position.y][position.x],
+    const yIndex = toGridIndex(state.grid, position);
+    if (newGrid[yIndex]?.[position.x]) {
+      newGrid[yIndex][position.x] = {
+        ...newGrid[yIndex][position.x],
         base,
         isUnlocked: true, // The cell with a base is always unlocked
       };
@@ -492,14 +523,15 @@ export const useGameStore = create<GameState>((set, get) => ({
       ];
 
       adjacentPositions.forEach(({ pos, side }) => {
+        const adjYIndex = toGridIndex(state.grid, pos);
         if (
-          pos.y >= 0 &&
-          pos.y < state.gridHeight &&
+          adjYIndex >= 0 &&
+          adjYIndex < state.gridHeight &&
           pos.x >= 0 &&
           pos.x < state.gridWidth &&
           definition.connectionSides.includes(side)
         ) {
-          newGrid[pos.y][pos.x].isUnlocked = true;
+          newGrid[adjYIndex][pos.x].isUnlocked = true;
         }
       });
     }
@@ -507,11 +539,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ grid: newGrid });
   },
 
-  initializeGrid: (width, height) =>
+  initializeGrid: (width, height, aboveRows = DEFAULT_ABOVE_SURFACE_ROWS) =>
     set(() => ({
-      grid: createEmptyGrid(width, height),
+      grid: createEmptyGrid(width, height, aboveRows),
       gridWidth: width,
-      gridHeight: height,
+      gridHeight: height + aboveRows,
     })),
 
   calculateResourceRates: () => {
@@ -640,8 +672,8 @@ export const useGameStore = create<GameState>((set, get) => ({
         }
 
         if (
-          state.ui.selectedCell?.x === x &&
-          state.ui.selectedCell?.y === y &&
+          state.ui.selectedCell?.x === cell.position.x &&
+          state.ui.selectedCell?.y === cell.position.y &&
           state.ui.selectedBase &&
           Math.floor(state.ui.selectedBase.constructionProgress) !== Math.floor(progress)
         ) {
@@ -829,7 +861,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       cityName: name,
       grid: hydratedGrid,
       gridWidth: hydratedGrid[0]?.length || 10,
-      gridHeight: hydratedGrid.length || 15,
+      gridHeight: hydratedGrid.length || (DEFAULT_OCEAN_ROWS + DEFAULT_ABOVE_SURFACE_ROWS),
       resources: hydratedResources,
       resourceCapacity: hydratedCapacity,
       constructionQueue: newQueue,
@@ -892,8 +924,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       // Update grid
       const newGrid = state.grid.map((row) => row.map((cell) => ({ ...cell })));
-      newGrid[position.y][position.x] = {
-        ...newGrid[position.y][position.x],
+      const yIndex = toGridIndex(state.grid, position);
+      if (!newGrid[yIndex]?.[position.x]) {
+        console.warn('Invalid build position for pending action');
+        return false;
+      }
+      newGrid[yIndex][position.x] = {
+        ...newGrid[yIndex][position.x],
         base: newBase,
       };
 

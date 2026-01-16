@@ -11,6 +11,7 @@ from ...core.dev_user import get_dev_user
 from ...core.database import get_database
 from ...core.config import settings
 from ...services.city_service import city_doc_to_state
+from ...services.grid_utils import world_y_to_index
 from ...services import action_service
 from .schemas import V1BuildStartRequest, V1BuildCompleteRequest, V1CityState
 
@@ -231,11 +232,12 @@ async def start_build_action(request: V1BuildStartRequest):
 
     grid = city_doc["grid"]
     x, y = request.position.x, request.position.y
+    grid_y = world_y_to_index(grid, y)
 
-    if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+    if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid position")
 
-    cell = grid[y][x]
+    cell = grid[grid_y][x]
     if cell.get("depth", 0) < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -278,7 +280,7 @@ async def start_build_action(request: V1BuildStartRequest):
         "construction_ends_at": end_time,
     }
 
-    grid[y][x]["base"] = base_doc
+    grid[grid_y][x]["base"] = base_doc
 
     await db.cities.update_one(
         {"_id": ObjectId(request.city_id)},
@@ -305,11 +307,12 @@ async def complete_build_action(request: V1BuildCompleteRequest):
 
     grid = city_doc["grid"]
     x, y = request.position.x, request.position.y
+    grid_y = world_y_to_index(grid, y)
 
-    if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+    if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid position")
 
-    cell = grid[y][x]
+    cell = grid[grid_y][x]
     base = cell.get("base")
     if not base or base.get("id") != request.base_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Base not found")
@@ -358,8 +361,9 @@ async def complete_build_action(request: V1BuildCompleteRequest):
         if side not in base_def["connection_sides"]:
             continue
         nx, ny = x + dx, y + dy
-        if 0 <= ny < len(grid) and 0 <= nx < len(grid[0]):
-            grid[ny][nx]["is_unlocked"] = True
+        adj_y = world_y_to_index(grid, ny)
+        if 0 <= adj_y < len(grid) and 0 <= nx < len(grid[0]):
+            grid[adj_y][nx]["is_unlocked"] = True
 
     await db.cities.update_one(
         {"_id": ObjectId(request.city_id)},

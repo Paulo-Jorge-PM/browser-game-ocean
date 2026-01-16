@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from ..core.security import decode_token
 from ..core.database import get_database
+from ..services.grid_utils import world_y_to_index
 
 # Create Socket.IO server with heartbeat settings
 # Note: ping_timeout should be longer than ping_interval to avoid false disconnections
@@ -83,13 +84,14 @@ async def build_base(sid, data):
 
         x, y = position.get("x"), position.get("y")
         grid = city_doc["grid"]
+        grid_y = world_y_to_index(grid, y)
 
         # Validate position
-        if not (0 <= y < len(grid) and 0 <= x < len(grid[0])):
+        if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
             await sio.emit("build_error", {"error": "Invalid position"}, to=sid)
             return
 
-        cell = grid[y][x]
+        cell = grid[grid_y][x]
         if cell.get("depth", 0) < 0:
             await sio.emit("build_error", {"error": "Above-surface construction locked"}, to=sid)
             return
@@ -102,13 +104,14 @@ async def build_base(sid, data):
             return
 
         # Place the base
-        grid[y][x]["base"] = base_data
+        grid[grid_y][x]["base"] = base_data
 
         # Unlock adjacent cells
         for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
             nx, ny = x + dx, y + dy
-            if 0 <= ny < len(grid) and 0 <= nx < len(grid[0]):
-                grid[ny][nx]["is_unlocked"] = True
+            adj_y = world_y_to_index(grid, ny)
+            if 0 <= adj_y < len(grid) and 0 <= nx < len(grid[0]):
+                grid[adj_y][nx]["is_unlocked"] = True
 
         # Update city in database
         await db.cities.update_one(
@@ -149,14 +152,23 @@ async def update_construction(sid, data):
     try:
         db = get_database()
         x, y = position.get("x"), position.get("y")
+        city_doc = await db.cities.find_one({"_id": ObjectId(city_id)}, {"grid": 1})
+        if not city_doc:
+            await sio.emit("update_error", {"error": "City not found"}, to=sid)
+            return
+        grid = city_doc.get("grid", [])
+        grid_y = world_y_to_index(grid, y)
+        if not (0 <= grid_y < len(grid) and 0 <= x < len(grid[0])):
+            await sio.emit("update_error", {"error": "Invalid position"}, to=sid)
+            return
 
         # Update the base in the database
         await db.cities.update_one(
             {"_id": ObjectId(city_id)},
             {
                 "$set": {
-                    f"grid.{y}.{x}.base.is_operational": is_operational,
-                    f"grid.{y}.{x}.base.construction_progress": 100,
+                    f"grid.{grid_y}.{x}.base.is_operational": is_operational,
+                    f"grid.{grid_y}.{x}.base.construction_progress": 100,
                 }
             },
         )

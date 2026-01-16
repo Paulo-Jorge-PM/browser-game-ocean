@@ -87,9 +87,9 @@ export class WaveSystem {
       wave.graphics.clear();
 
       // Draw wave as a series of points
-      wave.graphics.moveTo(-10, this.surfaceY);
+      wave.graphics.moveTo(0, this.surfaceY);
 
-      for (let x = -10; x <= this.width + 10; x += 5) {
+      for (let x = 0; x <= this.width; x += 5) {
         const y =
           this.surfaceY +
           Math.sin(x * wave.frequency + wave.phase) * wave.amplitude +
@@ -99,8 +99,8 @@ export class WaveSystem {
       }
 
       // Close the shape to fill below the wave
-      wave.graphics.lineTo(this.width + 10, this.surfaceY + 20);
-      wave.graphics.lineTo(-10, this.surfaceY + 20);
+      wave.graphics.lineTo(this.width, this.surfaceY + 20);
+      wave.graphics.lineTo(0, this.surfaceY + 20);
       wave.graphics.closePath();
 
       wave.graphics.fill({ color: wave.color, alpha: wave.alpha });

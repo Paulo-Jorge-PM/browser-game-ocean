@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
 import { useGameStore } from '../../stores/gameStore';
 import { BASE_DEFINITIONS } from '../constants/bases';
@@ -6,18 +6,19 @@ import { WorkerManager } from '../entities/Worker';
 import { StructureManager } from '../entities/Structure';
 import { BubbleSystem } from '../systems/Bubbles';
 import { WaveSystem } from '../systems/WaveSystem';
-import { CloudSystem } from '../systems/CloudSystem';
+import { SurfaceClouds } from '../systems/SurfaceClouds';
+import { SurfaceMountains } from '../systems/SurfaceMountains';
 import { ParallaxBackground } from '../systems/ParallaxBackground';
 import { SpriteManager } from '../rendering/SpriteManager';
 import { ViewportController } from './ViewportController';
 import { FogOfWar } from '../systems/FogOfWar';
-import { SURFACE_ROW_INDEX } from '../constants/grid';
+import { DEFAULT_ABOVE_SURFACE_ROWS } from '../constants/grid';
 
 const CELL_SIZE = 64;
 const GRID_PADDING = 40;
 const TOP_BAR_HEIGHT = 48; // ResourceBar height
 const BOTTOM_PANEL_HEIGHT = 208; // BottomPanel height (h-52 = 13rem = 208px)
-const SKY_HEIGHT = 60; // Height of sky area above water
+const SKY_TOP_PADDING = 24; // Extra sky above the top row for a softer gradient
 
 // Colors
 const COLORS = {
@@ -29,6 +30,25 @@ const COLORS = {
   cellHover: 0x2a6a9a,
   surface: 0x00d4ff,
   construction: 0xffaa00,
+  skyTop: 0xd6f4ff,
+  skyBottom: 0x8dc8f0,
+  skyHighlight: 0xc7ecff,
+  skyHaze: 0xecf9ff,
+};
+
+const lerpColor = (from: number, to: number, t: number) => {
+  const fromR = (from >> 16) & 0xff;
+  const fromG = (from >> 8) & 0xff;
+  const fromB = from & 0xff;
+  const toR = (to >> 16) & 0xff;
+  const toG = (to >> 8) & 0xff;
+  const toB = to & 0xff;
+
+  const r = Math.round(fromR + (toR - fromR) * t);
+  const g = Math.round(fromG + (toG - fromG) * t);
+  const b = Math.round(fromB + (toB - fromB) * t);
+
+  return (r << 16) + (g << 8) + b;
 };
 
 // Interface for tracking construction progress bars
@@ -48,7 +68,8 @@ export function GameCanvas() {
   const spriteManagerRef = useRef<SpriteManager | null>(null);
   const bubbleSystemRef = useRef<BubbleSystem | null>(null);
   const waveSystemRef = useRef<WaveSystem | null>(null);
-  const cloudSystemRef = useRef<CloudSystem | null>(null);
+  const surfaceCloudsRef = useRef<SurfaceClouds | null>(null);
+  const surfaceMountainsRef = useRef<SurfaceMountains | null>(null);
   const parallaxRef = useRef<ParallaxBackground | null>(null);
   const viewportRef = useRef<ViewportController | null>(null);
   const fogOfWarRef = useRef<FogOfWar | null>(null);
@@ -58,6 +79,14 @@ export function GameCanvas() {
 
   const { grid, gridWidth, gridHeight, ui, selectCell, getBuildableCells } = useGameStore();
 
+  const surfaceRowIndex = useMemo(() => {
+    const topWorldY = grid[0]?.[0]?.position.y;
+    if (typeof topWorldY === 'number') {
+      return -topWorldY;
+    }
+    return DEFAULT_ABOVE_SURFACE_ROWS;
+  }, [grid]);
+
   const centerGrid = useCallback((app: Application) => {
     const gridPixelWidth = gridWidth * CELL_SIZE;
 
@@ -65,7 +94,7 @@ export function GameCanvas() {
     // Account for: top bar (48px) + gap + surface label (25px)
     const offsetX = Math.max(GRID_PADDING, (app.screen.width - gridPixelWidth) / 2);
     const offsetY = TOP_BAR_HEIGHT + 30; // 48px top bar + 30px for surface label
-    const surfaceY = offsetY + SURFACE_ROW_INDEX * CELL_SIZE;
+    const surfaceY = offsetY + surfaceRowIndex * CELL_SIZE;
 
     gridOffsetRef.current = { x: offsetX, y: offsetY };
 
@@ -75,12 +104,31 @@ export function GameCanvas() {
     }
 
     waveSystemRef.current?.resize(
-      gridPixelWidth + GRID_PADDING * 2,
+      gridPixelWidth,
       surfaceY,
-      offsetX - GRID_PADDING
+      offsetX
     );
-    cloudSystemRef.current?.resize(app.screen.width, surfaceY - 10);
-  }, [gridWidth]);
+    const skyHeight = Math.max(0, surfaceRowIndex) * CELL_SIZE;
+    if (skyHeight > 0) {
+      surfaceMountainsRef.current?.resize(
+        gridPixelWidth,
+        skyHeight,
+        offsetX,
+        offsetY
+      );
+    }
+    if (surfaceCloudsRef.current) {
+      const cloudBandWorldY = surfaceRowIndex >= 2 ? -2 : -1;
+      const cloudBandIndex = cloudBandWorldY + surfaceRowIndex;
+      const cloudBandY = offsetY + cloudBandIndex * CELL_SIZE;
+      surfaceCloudsRef.current.resize(
+        gridPixelWidth,
+        CELL_SIZE,
+        offsetX,
+        cloudBandY
+      );
+    }
+  }, [gridWidth, surfaceRowIndex]);
 
   const drawGrid = useCallback(() => {
     if (!gridContainerRef.current || !workerManagerRef.current) return;
@@ -100,27 +148,47 @@ export function GameCanvas() {
     const buildableCells = getBuildableCells();
     const buildableSet = new Set(buildableCells.map(p => `${p.x},${p.y}`));
 
-    const surfaceRowOffset = SURFACE_ROW_INDEX * CELL_SIZE;
-    const skyHeight = SKY_HEIGHT + surfaceRowOffset;
+    const surfaceRowOffset = surfaceRowIndex * CELL_SIZE;
+    const aboveSurfaceRows = Math.max(0, surfaceRowIndex);
+    const skyHeight = aboveSurfaceRows * CELL_SIZE;
 
     // Draw sky background gradient (above the water surface)
-    const skyBg = new Graphics();
-    skyBg.eventMode = 'none'; // Don't block clicks
-    // Sky gradient from lighter blue at top to darker near surface
-    for (let i = 0; i < skyHeight; i += 10) {
-      const gradientProgress = i / skyHeight;
-      const skyColor = 0x1a3050 + Math.floor(gradientProgress * 0x203040);
-      skyBg.rect(-GRID_PADDING, -SKY_HEIGHT + i, gridWidth * CELL_SIZE + GRID_PADDING * 2, 10);
-      skyBg.fill({ color: skyColor, alpha: 0.8 - gradientProgress * 0.3 });
+    if (skyHeight > 0) {
+      const skyBg = new Graphics();
+      skyBg.eventMode = 'none'; // Don't block clicks
+      const skyStep = 1;
+      const totalSkyHeight = skyHeight + SKY_TOP_PADDING;
+
+      for (let i = 0; i <= totalSkyHeight; i += skyStep) {
+        const gradientProgress = totalSkyHeight > 0 ? i / totalSkyHeight : 0;
+        const skyColor = lerpColor(COLORS.skyTop, COLORS.skyBottom, gradientProgress);
+        skyBg.rect(0, -SKY_TOP_PADDING + i, gridWidth * CELL_SIZE, skyStep);
+        skyBg.fill({ color: skyColor, alpha: 1 });
+      }
+
+      const hazeHeight = Math.min(24, skyHeight);
+      if (hazeHeight > 0) {
+        for (let i = 0; i <= hazeHeight; i += 2) {
+          const hazeAlpha = (1 - i / hazeHeight) * 0.25;
+          skyBg.rect(
+            0,
+            skyHeight - hazeHeight + i,
+            gridWidth * CELL_SIZE,
+            2
+          );
+          skyBg.fill({ color: COLORS.skyHaze, alpha: hazeAlpha });
+        }
+      }
+
+      gridContainer.addChild(skyBg);
     }
-    gridContainer.addChild(skyBg);
 
     // Draw ocean background gradient effect
     const oceanBg = new Graphics();
     oceanBg.eventMode = 'none'; // Don't block clicks
-    const waterRows = Math.max(1, gridHeight - SURFACE_ROW_INDEX);
-    for (let y = SURFACE_ROW_INDEX; y < gridHeight; y++) {
-      const depthIndex = y - SURFACE_ROW_INDEX;
+    const waterRows = Math.max(1, gridHeight - surfaceRowIndex);
+    for (let y = surfaceRowIndex; y < gridHeight; y++) {
+      const depthIndex = y - surfaceRowIndex;
       const alpha = 0.15 + (depthIndex / waterRows) * 0.2;
       oceanBg.rect(0, y * CELL_SIZE, gridWidth * CELL_SIZE, CELL_SIZE);
       oceanBg.fill({ color: 0x001830, alpha });
@@ -138,8 +206,11 @@ export function GameCanvas() {
         cellContainer.y = y * CELL_SIZE;
 
         const cellGraphics = new Graphics();
-        const isSelected = ui.selectedCell?.x === x && ui.selectedCell?.y === y;
-        const isBuildable = buildableSet.has(`${x},${y}`);
+        const isSelected = ui.selectedCell?.x === cell.position.x && ui.selectedCell?.y === cell.position.y;
+        const isAboveSurface = cell.depth < 0;
+        const isSkyCell = isAboveSurface && !cell.base;
+        const cellKey = `${cell.position.x},${cell.position.y}`;
+        const isBuildable = buildableSet.has(cellKey);
 
         // Depth-based darkening
         const depthIndex = Math.max(0, cell.depth);
@@ -158,7 +229,14 @@ export function GameCanvas() {
           strokeAlpha = 0.5;
         }
 
-        if (isBuildable && !cell.base) {
+        if (isSkyCell) {
+          fillColor = COLORS.skyHighlight;
+          fillAlpha = 0.02;
+          strokeAlpha = 0;
+          strokeWidth = 0;
+        }
+
+        if (isBuildable && !cell.base && !isSkyCell) {
           fillColor = COLORS.cellBuildable;
           fillAlpha = 0.25;
           strokeColor = COLORS.cellBuildable;
@@ -178,17 +256,43 @@ export function GameCanvas() {
           strokeAlpha = 1;
         }
 
+        const drawCell = (
+          color: number,
+          alpha: number,
+          strokeColorValue: number,
+          strokeWidthValue: number,
+          strokeAlphaValue: number
+        ) => {
+          if (isSkyCell) {
+            cellGraphics.rect(0, 0, CELL_SIZE, CELL_SIZE);
+          } else {
+            cellGraphics.roundRect(2, 2, CELL_SIZE - 4, CELL_SIZE - 4, 4);
+          }
+          cellGraphics.fill({ color, alpha });
+          if (strokeAlphaValue > 0 && strokeWidthValue > 0) {
+            cellGraphics.stroke({
+              color: strokeColorValue,
+              width: strokeWidthValue,
+              alpha: strokeAlphaValue,
+            });
+          }
+        };
+
         // Draw cell background
-        cellGraphics.roundRect(2, 2, CELL_SIZE - 4, CELL_SIZE - 4, 4);
-        cellGraphics.fill({ color: fillColor, alpha: fillAlpha * depthFactor });
-        cellGraphics.stroke({ color: strokeColor, width: strokeWidth, alpha: strokeAlpha });
+        drawCell(
+          fillColor,
+          fillAlpha * depthFactor,
+          strokeColor,
+          strokeWidth,
+          strokeAlpha
+        );
 
         // Make interactive
         cellGraphics.eventMode = 'static';
         cellGraphics.cursor = cell.isUnlocked ? 'pointer' : 'default';
 
-        const cellX = x;
-        const cellY = y;
+        const cellX = cell.position.x;
+        const cellY = cell.position.y;
 
         cellGraphics.on('pointerdown', () => {
           selectCell({ x: cellX, y: cellY });
@@ -197,19 +301,31 @@ export function GameCanvas() {
         cellGraphics.on('pointerover', () => {
           if (!isSelected && cell.isUnlocked) {
             cellGraphics.clear();
-            cellGraphics.roundRect(2, 2, CELL_SIZE - 4, CELL_SIZE - 4, 4);
-            cellGraphics.fill({ color: COLORS.cellHover, alpha: 0.5 });
-            cellGraphics.stroke({ color: COLORS.cellHover, width: 1, alpha: 0.8 });
+            if (isSkyCell) {
+              drawCell(COLORS.skyHighlight, 0.12, COLORS.skyHighlight, 1, 0.25);
+              return;
+            }
+            drawCell(
+              COLORS.cellHover,
+              0.5 * depthFactor,
+              COLORS.cellHover,
+              1,
+              0.8
+            );
           }
         });
 
         cellGraphics.on('pointerout', () => {
           if (!isSelected) {
             cellGraphics.clear();
+            if (isSkyCell) {
+              drawCell(COLORS.skyHighlight, 0.02, COLORS.skyHighlight, 0, 0);
+              return;
+            }
             let color = cell.isUnlocked ? COLORS.cellUnlocked : COLORS.cellLocked;
             let alpha = cell.isUnlocked ? 0.4 : 0.2;
 
-            if (isBuildable && !cell.base) {
+            if (isBuildable && !cell.base && !isSkyCell) {
               color = COLORS.cellBuildable;
               alpha = 0.25;
             }
@@ -220,13 +336,13 @@ export function GameCanvas() {
               alpha = cell.base.isOperational ? 0.7 : 0.4;
             }
 
-            cellGraphics.roundRect(2, 2, CELL_SIZE - 4, CELL_SIZE - 4, 4);
-            cellGraphics.fill({ color, alpha: alpha * depthFactor });
-            cellGraphics.stroke({
-              color: isBuildable && !cell.base ? COLORS.cellBuildable : COLORS.gridLine,
-              width: 1,
-              alpha: isBuildable && !cell.base ? 0.6 : 0.3,
-            });
+            drawCell(
+              color,
+              alpha * depthFactor,
+              isBuildable && !cell.base ? COLORS.cellBuildable : COLORS.gridLine,
+              1,
+              isBuildable && !cell.base ? 0.6 : 0.3
+            );
           }
         });
 
@@ -337,7 +453,7 @@ export function GameCanvas() {
 
     // Draw depth labels on left
     for (let y = 0; y < gridHeight; y++) {
-      const rowDepth = grid[y]?.[0]?.depth ?? y - SURFACE_ROW_INDEX;
+      const rowDepth = grid[y]?.[0]?.depth ?? y - surfaceRowIndex;
       if (rowDepth < 0) continue;
       const depthLabel = new Text({
         text: `${rowDepth * 10}m`,
@@ -355,30 +471,17 @@ export function GameCanvas() {
     // Draw surface line with glow
     const surfaceGlow = new Graphics();
     surfaceGlow.eventMode = 'none'; // Don't block clicks
-    surfaceGlow.rect(-5, surfaceRowOffset - 3, gridWidth * CELL_SIZE + 10, 6);
+    surfaceGlow.rect(0, surfaceRowOffset - 3, gridWidth * CELL_SIZE, 6);
     surfaceGlow.fill({ color: COLORS.surface, alpha: 0.2 });
     gridContainer.addChild(surfaceGlow);
 
     const surfaceLine = new Graphics();
     surfaceLine.eventMode = 'none'; // Don't block clicks
-    surfaceLine.moveTo(-5, surfaceRowOffset);
-    surfaceLine.lineTo(gridWidth * CELL_SIZE + 5, surfaceRowOffset);
+    surfaceLine.moveTo(0, surfaceRowOffset);
+    surfaceLine.lineTo(gridWidth * CELL_SIZE, surfaceRowOffset);
     surfaceLine.stroke({ color: COLORS.surface, width: 2, alpha: 0.8 });
     gridContainer.addChild(surfaceLine);
-
-    // Surface label
-    const surfaceLabel = new Text({
-      text: '~ OCEAN SURFACE ~',
-      style: new TextStyle({
-        fontSize: 11,
-        fill: COLORS.surface,
-        fontFamily: 'monospace',
-      }),
-    });
-    surfaceLabel.x = (gridWidth * CELL_SIZE) / 2 - surfaceLabel.width / 2;
-    surfaceLabel.y = surfaceRowOffset - 18;
-    gridContainer.addChild(surfaceLabel);
-  }, [grid, gridWidth, gridHeight, ui.selectedCell, selectCell, getBuildableCells]);
+  }, [grid, gridWidth, gridHeight, surfaceRowIndex, ui.selectedCell, selectCell, getBuildableCells]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -413,7 +516,7 @@ export function GameCanvas() {
       // Calculate grid position for visual effect systems
       const gridPixelWidth = gridWidth * CELL_SIZE;
       const offsetY = TOP_BAR_HEIGHT + 30;
-      const surfaceY = offsetY + SURFACE_ROW_INDEX * CELL_SIZE;
+      const surfaceY = offsetY + surfaceRowIndex * CELL_SIZE;
       const offsetX = Math.max(GRID_PADDING, (app.screen.width - gridPixelWidth) / 2);
 
       // === LAYER ORDER: First added = drawn behind, Last added = drawn on top ===
@@ -426,15 +529,7 @@ export function GameCanvas() {
       );
       parallaxRef.current = parallax;
 
-      // 2. Cloud system in sky area
-      const cloudSystem = new CloudSystem(
-        app.stage,
-        app.screen.width,
-        surfaceY - 10
-      );
-      cloudSystemRef.current = cloudSystem;
-
-      // 3. Bubble system (bubbles in water area)
+      // 2. Bubble system (bubbles in water area)
       const bubbleSystem = new BubbleSystem(
         app.stage,
         app.screen.width,
@@ -442,19 +537,44 @@ export function GameCanvas() {
       );
       bubbleSystemRef.current = bubbleSystem;
 
-      // 4. Grid container - THE MAIN GAME LAYER (on top so it's visible)
+      // 3. Grid container - THE MAIN GAME LAYER (on top so it's visible)
       const gridContainer = new Container();
       app.stage.addChild(gridContainer);
       gridContainerRef.current = gridContainer;
 
-      // 5. Wave system at water surface (on top of grid at surface line only)
+      // 4. Wave system at water surface (on top of grid at surface line only)
       const waveSystem = new WaveSystem(
         app.stage,
-        gridPixelWidth + GRID_PADDING * 2,
+        gridPixelWidth,
         surfaceY,
-        offsetX - GRID_PADDING
+        offsetX
       );
       waveSystemRef.current = waveSystem;
+
+      // 5. Sky layers (mountains + clouds) above the grid
+      const skyHeight = Math.max(0, surfaceRowIndex) * CELL_SIZE;
+      if (skyHeight > 0) {
+        const surfaceMountains = new SurfaceMountains(
+          app.stage,
+          gridPixelWidth,
+          skyHeight,
+          offsetX,
+          offsetY
+        );
+        surfaceMountainsRef.current = surfaceMountains;
+
+        const cloudBandWorldY = surfaceRowIndex >= 2 ? -2 : -1;
+        const cloudBandIndex = cloudBandWorldY + surfaceRowIndex;
+        const cloudBandY = offsetY + cloudBandIndex * CELL_SIZE;
+        const surfaceClouds = new SurfaceClouds(
+          app.stage,
+          gridPixelWidth,
+          CELL_SIZE,
+          offsetX,
+          cloudBandY
+        );
+        surfaceCloudsRef.current = surfaceClouds;
+      }
 
       // Create worker manager (add to grid container so workers move with grid)
       const workerManager = new WorkerManager(gridContainer);
@@ -513,11 +633,36 @@ export function GameCanvas() {
         const deltaMs = now - lastTimeRef.current;
         lastTimeRef.current = now;
 
+        const gridContainer = gridContainerRef.current;
+        if (gridContainer) {
+          const gridPixelWidth = gridWidth * CELL_SIZE;
+          const surfaceY = gridContainer.y + surfaceRowIndex * CELL_SIZE;
+          waveSystemRef.current?.resize(
+            gridPixelWidth,
+            surfaceY,
+            gridContainer.x
+          );
+
+          surfaceMountainsRef.current?.setPosition(
+            gridContainer.x,
+            gridContainer.y
+          );
+          if (surfaceCloudsRef.current) {
+            const cloudBandWorldY = surfaceRowIndex >= 2 ? -2 : -1;
+            const cloudBandIndex = cloudBandWorldY + surfaceRowIndex;
+            surfaceCloudsRef.current.setPosition(
+              gridContainer.x,
+              gridContainer.y + cloudBandIndex * CELL_SIZE
+            );
+          }
+        }
+
         workerManagerRef.current?.update(deltaMs);
         structureManagerRef.current?.update(deltaMs);
         bubbleSystemRef.current?.update(deltaMs);
         waveSystemRef.current?.update(deltaMs);
-        cloudSystemRef.current?.update(deltaMs);
+        surfaceMountainsRef.current?.update(deltaMs);
+        surfaceCloudsRef.current?.update(deltaMs);
         parallaxRef.current?.update(deltaMs);
 
         // Update viewport scrolling
@@ -616,7 +761,8 @@ export function GameCanvas() {
 
       bubbleSystemRef.current?.destroy();
       waveSystemRef.current?.destroy();
-      cloudSystemRef.current?.destroy();
+      surfaceCloudsRef.current?.destroy();
+      surfaceMountainsRef.current?.destroy();
       parallaxRef.current?.destroy();
       fogOfWarRef.current?.destroy();
       structureManagerRef.current?.destroy();
@@ -639,8 +785,11 @@ export function GameCanvas() {
 
   // Redraw when state changes
   useEffect(() => {
+    if (appRef.current) {
+      centerGrid(appRef.current);
+    }
     drawGrid();
-  }, [drawGrid]);
+  }, [centerGrid, drawGrid]);
 
   return (
     <div

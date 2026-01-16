@@ -1,2 +1,2 @@
-export const ABOVE_SURFACE_ROWS = 2;
-export const SURFACE_ROW_INDEX = ABOVE_SURFACE_ROWS;
+export const DEFAULT_OCEAN_ROWS = 15;
+export const DEFAULT_ABOVE_SURFACE_ROWS = 2;

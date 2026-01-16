@@ -6,16 +6,18 @@ from ..core.config import settings
 
 def create_empty_grid(width: int, height: int) -> list[list[dict]]:
     grid = []
-    surface_row_index = settings.grid_surface_row_index
-    for y in range(height):
+    above_rows = settings.grid_above_surface_rows
+    total_height = height + above_rows
+    for row_index in range(total_height):
         row = []
         for x in range(width):
+            world_y = row_index - above_rows
             row.append(
                 {
-                    "position": {"x": x, "y": y},
+                    "position": {"x": x, "y": world_y},
                     "base": None,
-                    "is_unlocked": y == surface_row_index,
-                    "depth": y - surface_row_index,
+                    "is_unlocked": world_y <= 0,
+                    "depth": world_y,
                 }
             )
         grid.append(row)
@@ -25,12 +27,12 @@ def create_empty_grid(width: int, height: int) -> list[list[dict]]:
 def build_new_city_document(name: str, player_id: str) -> dict:
     grid = create_empty_grid(settings.grid_default_width, settings.grid_default_height)
 
-    surface_row_index = settings.grid_surface_row_index
+    surface_row_index = settings.grid_above_surface_rows
     center_x = settings.grid_default_width // 2
     command_ship = {
         "id": str(uuid.uuid4()),
         "type": "command_ship",
-        "position": {"x": center_x, "y": surface_row_index},
+        "position": {"x": center_x, "y": 0},
         "level": 1,
         "construction_progress": 100,
         "is_operational": True,
@@ -43,7 +45,7 @@ def build_new_city_document(name: str, player_id: str) -> dict:
         nx = center_x + dx
         if 0 <= nx < settings.grid_default_width:
             grid[surface_row_index][nx]["is_unlocked"] = True
-    if settings.grid_default_height > surface_row_index + 1:
+    if settings.grid_default_height > 1:
         grid[surface_row_index + 1][center_x]["is_unlocked"] = True
 
     # Default unlocked techs - Tier 1 techs that have no prerequisites and cost 0
